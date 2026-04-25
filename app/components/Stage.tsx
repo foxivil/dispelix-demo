@@ -42,6 +42,19 @@ const PHOTOS_TOAST_MS = 2000;
 const PHOTO_SIZE_BYTES = 2_400_000;
 const VIDEO_BYTES_PER_SECOND = 1_000_000;
 
+const CAMERA_STORAGE_KEY = "photos.selectedCameraId";
+
+type CameraDevice = {
+  deviceId: string;
+  label: string;
+};
+
+type SaveMediaResponse = {
+  ok: boolean;
+  filename: string;
+  publicUrl: string;
+};
+
 type SpeechRecognitionResult = {
   isFinal: boolean;
   0: { transcript: string };
@@ -111,6 +124,19 @@ export default function Stage() {
   const photosToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const photosClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const photosLastClickAt = useRef(0);
+
+  const cameraVideoRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraRecorderRef = useRef<MediaRecorder | null>(null);
+  const cameraVideoChunksRef = useRef<BlobPart[]>([]);
+  const cameraRecordingStartedAtRef = useRef<number | null>(null);
+
+  const [cameraReady, setCameraReady] = useState(false);
+  const [cameraDevices, setCameraDevices] = useState<CameraDevice[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem(CAMERA_STORAGE_KEY);
+  });
 
   const [searchQuery, setSearchQuery] = useState("");
   const [musicScrubTime, setMusicScrubTime] = useState<number | null>(null);
@@ -460,52 +486,322 @@ export default function Stage() {
     }, PHOTOS_TOAST_MS);
   };
 
-  const photosTakePhoto = () => {
-    photosShowToast("Photo taken");
+  const saveMediaToPublicImages = async (
+    blob: Blob,
+    filename: string,
+  ): Promise<SaveMediaResponse> => {
+    const formData = new FormData();
+    formData.append("file", blob, filename);
+    formData.append("filename", filename);
 
-    const idx = ++photoCounterRef.current;
+    const response = await fetch("/api/save-media", {
+      method: "POST",
+      body: formData,
+    });
 
-    const file: MediaFile = {
-      id: `f${++fileIdRef.current}`,
-      kind: "photo",
-      name: `photo_${idx}.heic`,
-      sizeBytes: PHOTO_SIZE_BYTES,
-      createdAt: Date.now(),
+    if (!response.ok) {
+      throw new Error("Failed to save media");
+    }
+
+    return (await response.json()) as SaveMediaResponse;
+  };
+
+  const stopCameraStream = (stream: MediaStream | null) => {
+    stream?.getTracks().forEach((track) => track.stop());
+  };
+
+  const attachCameraStream = async (stream: MediaStream) => {
+    cameraStreamRef.current = stream;
+
+    const video = cameraVideoRef.current;
+    if (video) {
+      video.srcObject = stream;
+      await video.play().catch(() => {
+        /* browser may require user gesture */
+      });
+    }
+
+    setCameraReady(true);
+  };
+
+  const openSelectedCamera = async (deviceId: string | null) => {
+    if (typeof navigator === "undefined") return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
+
+    try {
+      setCameraReady(false);
+
+      stopCameraStream(cameraStreamRef.current);
+      cameraStreamRef.current = null;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          deviceId: deviceId ? { exact: deviceId } : undefined,
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: true,
+      });
+
+      await attachCameraStream(stream);
+    } catch (err) {
+      console.warn("Camera with audio failed, retrying video only", err);
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            deviceId: deviceId ? { exact: deviceId } : undefined,
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
+          audio: false,
+        });
+
+        await attachCameraStream(stream);
+      } catch (videoOnlyErr) {
+        console.error("Camera open failed", videoOnlyErr);
+        setCameraReady(false);
+        photosShowToast("Camera unavailable");
+      }
+    }
+  };
+
+  const discoverCameras = async () => {
+    if (typeof navigator === "undefined") return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
+
+    try {
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false,
+      });
+
+      permissionStream.getTracks().forEach((track) => track.stop());
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+
+      const videoInputs: CameraDevice[] = devices
+        .filter((device) => device.kind === "videoinput")
+        .map((device, index) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Camera ${index + 1}`,
+        }));
+
+      setCameraDevices(videoInputs);
+
+      if (videoInputs.length === 0) {
+        setCameraReady(false);
+        photosShowToast("No camera found");
+        return;
+      }
+
+      const savedCamera = selectedCameraId
+        ? videoInputs.find((camera) => camera.deviceId === selectedCameraId)
+        : null;
+
+      const likelyExternal =
+        savedCamera ??
+        videoInputs.find((camera) => {
+          const label = camera.label.toLowerCase();
+
+          return (
+            label &&
+            !label.includes("facetime") &&
+            !label.includes("built-in") &&
+            !label.includes("integrated") &&
+            !label.includes("continuity") &&
+            !label.includes("desk view")
+          );
+        }) ??
+        videoInputs[0];
+
+      setSelectedCameraId(likelyExternal.deviceId);
+      window.localStorage.setItem(CAMERA_STORAGE_KEY, likelyExternal.deviceId);
+
+      photosShowToast(`Camera: ${likelyExternal.label}`);
+
+      await openSelectedCamera(likelyExternal.deviceId);
+    } catch (err) {
+      console.error("Camera discovery failed", err);
+      setCameraReady(false);
+      photosShowToast("Camera discovery failed");
+    }
+  };
+
+  const handleCameraSelect = async (deviceId: string) => {
+    setSelectedCameraId(deviceId);
+    window.localStorage.setItem(CAMERA_STORAGE_KEY, deviceId);
+
+    const camera = cameraDevices.find((item) => item.deviceId === deviceId);
+    if (camera) photosShowToast(`Camera: ${camera.label}`);
+
+    await openSelectedCamera(deviceId);
+  };
+
+  useEffect(() => {
+    discoverCameras();
+
+    return () => {
+      if (cameraRecorderRef.current?.state === "recording") {
+        try {
+          cameraRecorderRef.current.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+
+      stopCameraStream(cameraStreamRef.current);
+      cameraStreamRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    setFiles((prev) => [...prev, file]);
+  const photosTakePhoto = () => {
+    const video = cameraVideoRef.current;
+
+    if (!cameraReady || !video || video.readyState < 2) {
+      photosShowToast("Camera not ready");
+      return;
+    }
+
+    const width = video.videoWidth || 1920;
+    const height = video.videoHeight || 1080;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      photosShowToast("Photo failed");
+      return;
+    }
+
+    ctx.drawImage(video, 0, 0, width, height);
+
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          photosShowToast("Photo failed");
+          return;
+        }
+
+        const idx = ++photoCounterRef.current;
+        const filename = `photo_${idx}.jpg`;
+
+        saveMediaToPublicImages(blob, filename)
+          .then(({ publicUrl }) => {
+            photosShowToast(`Saved ${filename}`);
+
+            const file = {
+              id: `f${++fileIdRef.current}`,
+              kind: "photo",
+              name: filename,
+              sizeBytes: blob.size || PHOTO_SIZE_BYTES,
+              createdAt: Date.now(),
+              url: publicUrl,
+              mimeType: blob.type,
+            } as MediaFile;
+
+            setFiles((prev) => [...prev, file]);
+          })
+          .catch((error) => {
+            console.error(error);
+            photosShowToast("Photo save failed");
+          });
+      },
+      "image/jpeg",
+      0.92,
+    );
   };
 
   const photosStartRecording = () => {
+    const stream = cameraStreamRef.current;
+
+    if (!cameraReady || !stream) {
+      photosShowToast("Camera not ready");
+      return;
+    }
+
+    if (cameraRecorderRef.current?.state === "recording") return;
+
+    cameraVideoChunksRef.current = [];
+
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+      ? "video/webm;codecs=vp9"
+      : MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
+        ? "video/webm;codecs=vp8"
+        : "video/webm";
+
+    const recorder = new MediaRecorder(stream, { mimeType });
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        cameraVideoChunksRef.current.push(event.data);
+      }
+    };
+
+    recorder.onstop = () => {
+      const start = cameraRecordingStartedAtRef.current;
+      const elapsed = start != null ? Date.now() - start : 0;
+
+      const blob = new Blob(cameraVideoChunksRef.current, { type: mimeType });
+
+      cameraVideoChunksRef.current = [];
+      cameraRecordingStartedAtRef.current = null;
+      cameraRecorderRef.current = null;
+
+      setPhotosRecording(false);
+      setPhotosRecordingMs(0);
+
+      const idx = ++videoCounterRef.current;
+      const filename = `video_${idx}.webm`;
+
+      saveMediaToPublicImages(blob, filename)
+        .then(({ publicUrl }) => {
+          photosShowToast(`Saved ${filename}`);
+
+          const file = {
+            id: `f${++fileIdRef.current}`,
+            kind: "video",
+            name: filename,
+            sizeBytes:
+              blob.size ||
+              Math.max(1, Math.round((elapsed / 1000) * VIDEO_BYTES_PER_SECOND)),
+            createdAt: Date.now(),
+            durationMs: elapsed,
+            url: publicUrl,
+            mimeType: blob.type,
+          } as MediaFile;
+
+          setFiles((prev) => [...prev, file]);
+        })
+        .catch((error) => {
+          console.error(error);
+          photosShowToast("Video save failed");
+        });
+    };
+
+    cameraRecorderRef.current = recorder;
+    cameraRecordingStartedAtRef.current = Date.now();
     photosRecordingStartRef.current = Date.now();
+
     setPhotosRecordingMs(0);
     setPhotosRecording(true);
+
+    recorder.start();
   };
 
   const photosStopRecording = () => {
-    const start = photosRecordingStartRef.current;
-    const elapsed = start != null ? Date.now() - start : 0;
+    const recorder = cameraRecorderRef.current;
 
-    photosRecordingStartRef.current = null;
-    setPhotosRecording(false);
-    setPhotosRecordingMs(0);
-    photosShowToast(`Video recorded · ${formatDuration(elapsed)}`);
+    if (!recorder || recorder.state === "inactive") {
+      setPhotosRecording(false);
+      setPhotosRecordingMs(0);
+      return;
+    }
 
-    const idx = ++videoCounterRef.current;
-
-    const file: MediaFile = {
-      id: `f${++fileIdRef.current}`,
-      kind: "video",
-      name: `video_${idx}.mp4`,
-      sizeBytes: Math.max(
-        1,
-        Math.round((elapsed / 1000) * VIDEO_BYTES_PER_SECOND),
-      ),
-      createdAt: Date.now(),
-      durationMs: elapsed,
-    };
-
-    setFiles((prev) => [...prev, file]);
+    recorder.stop();
   };
 
   const handlePhotoClick = () => {
@@ -780,6 +1076,95 @@ export default function Stage() {
         touchAction: "none",
       }}
     >
+      <video
+        ref={cameraVideoRef}
+        muted
+        playsInline
+        autoPlay
+        style={{
+          position: "absolute",
+          left: "-9999px",
+          top: "-9999px",
+          width: "1px",
+          height: "1px",
+          opacity: 0,
+          pointerEvents: "none",
+        }}
+      />
+
+      <div
+        style={{
+          position: "absolute",
+          top: "16px",
+          left: "16px",
+          zIndex: 50,
+          display: activeApp === "photos" ? "flex" : "none",
+          alignItems: "center",
+          gap: "8px",
+          padding: "8px 10px",
+          borderRadius: "12px",
+          background: c("black", 0.65),
+          border: `1px solid ${c("white", 0.16)}`,
+          backdropFilter: "blur(8px)",
+          WebkitBackdropFilter: "blur(8px)",
+          color: c("white"),
+          fontFamily:
+            "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+          fontSize: "12px",
+        }}
+      >
+        <span style={{ color: c("white", 0.65) }}>Camera</span>
+
+        <select
+          value={selectedCameraId ?? ""}
+          onChange={(e) => handleCameraSelect(e.target.value)}
+          style={{
+            maxWidth: "260px",
+            background: c("black", 0.85),
+            color: c("white"),
+            border: `1px solid ${c("white", 0.18)}`,
+            borderRadius: "8px",
+            padding: "6px 8px",
+            font: "inherit",
+          }}
+        >
+          {cameraDevices.map((camera) => (
+            <option key={camera.deviceId} value={camera.deviceId}>
+              {camera.label}
+            </option>
+          ))}
+        </select>
+
+        <button
+          type="button"
+          onClick={discoverCameras}
+          style={{
+            background: c("white", 0.08),
+            color: c("white"),
+            border: `1px solid ${c("white", 0.16)}`,
+            borderRadius: "8px",
+            padding: "6px 8px",
+            font: "inherit",
+            cursor: "pointer",
+          }}
+        >
+          Refresh
+        </button>
+
+        <span
+          title={cameraReady ? "Camera ready" : "Camera not ready"}
+          style={{
+            width: "8px",
+            height: "8px",
+            borderRadius: "999px",
+            background: cameraReady ? c("white", 0.85) : c("redHot"),
+            boxShadow: cameraReady
+              ? `0 0 8px ${c("white", 0.65)}`
+              : `0 0 8px ${c("redHot", 0.8)}`,
+          }}
+        />
+      </div>
+
       <ScreenScope screen="left">
         <Block
           ref={blockRef}
