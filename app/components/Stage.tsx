@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { renderApp, type AppContext, type AppId } from "../apps/registry";
 import {
   type ChatMessage,
@@ -35,32 +35,23 @@ const COLUMN_HEIGHT = 720;
 const CENTER_X = COLUMN_WIDTH / 2;
 const CENTER_Y = COLUMN_HEIGHT / 2;
 
-// Main size controls.
-const UI_SCALE = 0.86;
-const DOCK_SCALE = 0.86;
-
 const DEFAULT_APP: AppId = "messages";
 
-// Click → wait this long for a possible second click; if none arrives, treat
-// the gesture as a single click. Two clicks within this window count as a
-// double-click. Tuned to be generous enough for unhurried double-taps while
-// still feeling responsive.
 const PHOTOS_DBLCLICK_MS = 280;
 const PHOTOS_TOAST_MS = 2000;
-// Demo "filesystem" sizing — every photo is the same on-disk size and every
-// recorded second of video occupies a fixed amount of bytes (≈ 1080p, 8 Mbps).
 const PHOTO_SIZE_BYTES = 2_400_000;
 const VIDEO_BYTES_PER_SECOND = 1_000_000;
 
-// Minimal local typing for the Web Speech API (not in TS lib by default)
 type SpeechRecognitionResult = {
   isFinal: boolean;
   0: { transcript: string };
 };
+
 type SpeechRecognitionEvent = {
   resultIndex: number;
   results: ArrayLike<SpeechRecognitionResult>;
 };
+
 type SpeechRecognitionInstance = {
   continuous: boolean;
   interimResults: boolean;
@@ -73,19 +64,18 @@ type SpeechRecognitionInstance = {
   onerror: ((e: unknown) => void) | null;
   onstart: (() => void) | null;
 };
+
 type SpeechRecognitionCtor = new () => SpeechRecognitionInstance;
 
 export default function Stage() {
   const {
     palette: { c },
   } = useTheme();
+
   const [calibrating, setCalibrating] = useState(false);
   const [dockActive, setDockActive] = useState(false);
   const [activeApp, setActiveApp] = useState<AppId>(DEFAULT_APP);
 
-  // Calibrated centre of the left block. The difference from the true centre
-  // is split between the two screens after calibration:
-  // left gets +half the measured difference, right gets -half.
   const [screenPos, setScreenPos] = useState<Position>(() =>
     defaultCalibrationPos(COLUMN_WIDTH, COLUMN_HEIGHT),
   );
@@ -104,8 +94,6 @@ export default function Stage() {
     y: CENTER_Y + leftOffsetY,
   };
 
-  // Messenger-specific shared state — kept here because both the left and
-  // right column render the same messenger instance.
   const [inputValue, setInputValue] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [botTyping, setBotTyping] = useState(false);
@@ -113,14 +101,10 @@ export default function Stage() {
   const [isRecording, setIsRecording] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
 
-  // Photos shared state — same idea: both columns render a controlled view
-  // off these values so they always stay pixel-identical.
   const [photosRecording, setPhotosRecording] = useState(false);
   const [photosRecordingMs, setPhotosRecordingMs] = useState(0);
   const [photosToast, setPhotosToast] = useState<PhotosToast | null>(null);
   const photosRecordingStartRef = useRef<number | null>(null);
-  // Mirrors photosRecording so the click handler always sees the latest
-  // value without re-binding on every render.
   const photosRecordingRef = useRef(false);
   photosRecordingRef.current = photosRecording;
   const photosToastIdRef = useRef(0);
@@ -128,34 +112,16 @@ export default function Stage() {
   const photosClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const photosLastClickAt = useRef(0);
 
-  // Search app shared state — the query lives in Stage so both columns of
-  // the dual screen stay in sync as the user types.
   const [searchQuery, setSearchQuery] = useState("");
-
-  // Music app — shared in-progress scrub position so a drag on one screen
-  // moves the slider on the other in real time. `null` when nobody is
-  // currently scrubbing; the actual seek is committed on release through
-  // `musicSync` instead.
   const [musicScrubTime, setMusicScrubTime] = useState<number | null>(null);
-
-  // Home app — index of the card currently shown in the on-boarding tour.
-  // Lifted into Stage so both screens always show the same card and the
-  // global ←/→ key handler below can drive it without each Home instance
-  // racing to update its own copy.
   const [homeCardIndex, setHomeCardIndex] = useState(0);
 
-  // Shared in-memory "filesystem" populated by the camera and read by the
-  // Files app. Per-kind counters provide the photo_i / video_i naming.
   const [files, setFiles] = useState<MediaFile[]>([]);
-  // Currently-opened file in the Files viewer (kept in Stage so both screens
-  // show the same media at the same time).
   const [openedFile, setOpenedFile] = useState<MediaFile | null>(null);
   const photoCounterRef = useRef(0);
   const videoCounterRef = useRef(0);
   const fileIdRef = useRef(0);
 
-  // Newest-first sort, identical to what Files.tsx renders, so prev/next
-  // navigation in the viewer agrees with the on-screen order.
   const sortedFiles = useMemo(
     () => [...files].sort((a, b) => b.createdAt - a.createdAt),
     [files],
@@ -165,10 +131,6 @@ export default function Stage() {
   const stageRef = useRef<HTMLDivElement>(null);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
-  // Set when the operator wants the session terminated immediately (e.g. by
-  // clicking Send mid-recording). Late `onresult` / `onend` callbacks from
-  // the SpeechRecognition engine check this and bail out instead of
-  // re-populating the input with a partial transcript.
   const voiceCancelledRef = useRef(false);
   const inputValueRef = useRef(inputValue);
   inputValueRef.current = inputValue;
@@ -176,9 +138,6 @@ export default function Stage() {
   const botReplyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const newMessageId = () => `msg-${++messageIdRef.current}`;
 
-  // Shared scroll-sync hub for the two mirrored chat panels. Living in a
-  // ref + useMemo so its identity is stable across renders and broadcasting
-  // doesn't trigger React updates.
   const chatScrollers = useRef<Set<HTMLDivElement>>(new Set());
   const chatSync = useMemo<ChatSync>(
     () => ({
@@ -190,8 +149,6 @@ export default function Stage() {
       },
       broadcast: (origin, scrollTop) => {
         chatScrollers.current.forEach((el) => {
-          // Skip the originator and any peer already at the target position
-          // so feedback through the peers' onScroll handlers naturally stops.
           if (el !== origin && el.scrollTop !== scrollTop) {
             el.scrollTop = scrollTop;
           }
@@ -201,10 +158,6 @@ export default function Stage() {
     [],
   );
 
-  // Shared playback-sync hub for the two mirrored <video> elements in the
-  // Files viewer. Tolerance checks on the receivers stop the inevitable
-  // event-driven feedback loops (a programmatic seek/play/volume on peer B
-  // re-fires the same event there, which would otherwise rebroadcast back).
   const videoTargets = useRef<Set<HTMLVideoElement>>(new Set());
   const videoSync = useMemo<VideoSync>(
     () => ({
@@ -217,8 +170,6 @@ export default function Stage() {
       broadcastTime: (origin, currentTime) => {
         videoTargets.current.forEach((el) => {
           if (el === origin) return;
-          // 0.3s tolerance avoids constant micro-seeks while still nudging
-          // peers back into sync if they drift while playing.
           if (Math.abs(el.currentTime - currentTime) > 0.3) {
             el.currentTime = currentTime;
           }
@@ -231,8 +182,6 @@ export default function Stage() {
             if (paused) {
               el.pause();
             } else {
-              // play() can be rejected if not in a user-gesture context;
-              // swallow so the originator at least keeps playing.
               el.play().catch(() => {
                 /* ignore */
               });
@@ -259,10 +208,6 @@ export default function Stage() {
     [],
   );
 
-  // Sister hub for the Music app's two mirrored <audio> elements. Same
-  // tolerance pattern as videoSync — receivers ignore changes that are
-  // already close enough so that the broadcast↔receive loop converges
-  // instead of bouncing forever.
   const musicTargets = useRef<Set<HTMLAudioElement>>(new Set());
   const musicSync = useMemo<MusicSync>(
     () => ({
@@ -288,7 +233,7 @@ export default function Stage() {
               el.pause();
             } else {
               el.play().catch(() => {
-                /* ignore — autoplay restrictions */
+                /* ignore */
               });
             }
           }
@@ -305,10 +250,9 @@ export default function Stage() {
     [],
   );
 
-  // Voice → typewriter state (refs so timers/handlers always see latest values)
-  const voiceBaseRef = useRef(""); // input value at the moment recording started
-  const voiceTargetRef = useRef(""); // latest combined transcript from the API
-  const voiceTypedRef = useRef(0); // how many chars of the target are already shown
+  const voiceBaseRef = useRef("");
+  const voiceTargetRef = useRef("");
+  const voiceTypedRef = useRef(0);
   const typeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const TYPE_INTERVAL_MS = 28;
@@ -320,6 +264,7 @@ export default function Stage() {
     const visible = target.slice(0, n);
     const sep = visible && base && !base.endsWith(" ") ? " " : "";
     const next = base + sep + visible;
+
     if (next !== inputValueRef.current) {
       inputValueRef.current = next;
       setInputValue(next);
@@ -335,6 +280,7 @@ export default function Stage() {
 
   const startTyping = () => {
     if (typeTimerRef.current) return;
+
     typeTimerRef.current = setInterval(() => {
       if (voiceTypedRef.current < voiceTargetRef.current.length) {
         voiceTypedRef.current += 1;
@@ -345,10 +291,12 @@ export default function Stage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
     const win = window as unknown as {
       SpeechRecognition?: SpeechRecognitionCtor;
       webkitSpeechRecognition?: SpeechRecognitionCtor;
     };
+
     const SR = win.SpeechRecognition ?? win.webkitSpeechRecognition;
     if (!SR) return;
 
@@ -358,33 +306,30 @@ export default function Stage() {
     rec.lang = "en-US";
 
     rec.onresult = (e) => {
-      // If the session was cancelled (e.g. by Send), drop late results so we
-      // don't overwrite the freshly-cleared input with a partial transcript.
       if (voiceCancelledRef.current) return;
-      // Recompute the full transcript from all results in the current session;
-      // interim entries update in place so summing always yields the latest text.
+
       let combined = "";
       for (let i = 0; i < e.results.length; i++) {
         combined += e.results[i][0].transcript;
       }
+
       voiceTargetRef.current = combined.replace(/^\s+/, "");
     };
+
     rec.onend = () => {
       if (voiceCancelledRef.current) {
-        // Cancelled mid-recording (e.g. Send was clicked). Just clean up the
-        // timers / state without flushing any pending transcript.
         voiceCancelledRef.current = false;
         stopTyping();
         setIsRecording(false);
         return;
       }
-      // Normal stop: flush any remaining un-typed characters so the input ends
-      // up with the full transcript.
+
       voiceTypedRef.current = voiceTargetRef.current.length;
       renderVoice();
       stopTyping();
       setIsRecording(false);
     };
+
     rec.onerror = () => {
       voiceCancelledRef.current = false;
       stopTyping();
@@ -396,11 +341,13 @@ export default function Stage() {
 
     return () => {
       stopTyping();
+
       try {
         rec.abort();
       } catch {
         /* ignore */
       }
+
       recognitionRef.current = null;
     };
   }, []);
@@ -408,9 +355,11 @@ export default function Stage() {
   const startVoice = () => {
     const rec = recognitionRef.current;
     if (!rec || isRecording) return;
+
     voiceBaseRef.current = inputValueRef.current;
     voiceTargetRef.current = "";
     voiceTypedRef.current = 0;
+
     try {
       rec.start();
       setIsRecording(true);
@@ -423,31 +372,31 @@ export default function Stage() {
   const stopVoice = () => {
     const rec = recognitionRef.current;
     if (!rec) return;
+
     try {
       rec.stop();
     } catch {
       /* not running */
     }
-    // onend will finalize the remaining text and clear the timer.
+
     setIsRecording(false);
   };
 
-  // Hard-cancel the voice session: discard any buffered audio (`abort()`
-  // instead of `stop()`) and wipe all transcript state so the input stays
-  // exactly as we leave it. The cancellation flag also tells `onresult` /
-  // `onend` to ignore any late events the browser still fires after abort.
   const cancelVoice = () => {
     const rec = recognitionRef.current;
+
     voiceCancelledRef.current = true;
     stopTyping();
     voiceBaseRef.current = "";
     voiceTargetRef.current = "";
     voiceTypedRef.current = 0;
     setIsRecording(false);
+
     if (!rec) {
       voiceCancelledRef.current = false;
       return;
     }
+
     try {
       rec.abort();
     } catch {
@@ -456,15 +405,10 @@ export default function Stage() {
   };
 
   const handleSubmit = (value: string) => {
-    // Always cancel any active recording — clicking Send commits whatever's
-    // in the input now and ends the voice session, so late transcript
-    // fragments must not leak back into the cleared input.
     cancelVoice();
     inputValueRef.current = "";
     setInputValue("");
 
-    // An empty submission while recording is just "stop + clear" — don't
-    // append a blank user message or schedule a bot reply.
     if (!value) return;
 
     const userMsg: ChatMessage = {
@@ -472,26 +416,28 @@ export default function Stage() {
       role: "user",
       text: value,
     };
+
     setMessages((prev) => [...prev, userMsg]);
 
-    // Cancel any in-flight reply, then schedule a fresh one with a small
-    // randomised delay so the bot feels like it's "typing".
     if (botReplyTimer.current) clearTimeout(botReplyTimer.current);
+
     setBotTyping(true);
+
     const delay = 600 + Math.random() * 900;
+
     botReplyTimer.current = setTimeout(() => {
       const botMsg: ChatMessage = {
         id: newMessageId(),
         role: "bot",
         text: generateBotReply(value),
       };
+
       setMessages((prev) => [...prev, botMsg]);
       setBotTyping(false);
       botReplyTimer.current = null;
     }, delay);
   };
 
-  // Cancel any pending bot reply on unmount so we don't setState after teardown.
   useEffect(() => {
     return () => {
       if (botReplyTimer.current) {
@@ -501,14 +447,14 @@ export default function Stage() {
     };
   }, []);
 
-  // -------------------- Photos camera logic --------------------
-
   const photosShowToast = (text: string) => {
     if (photosToastTimer.current) clearTimeout(photosToastTimer.current);
+
     const id = ++photosToastIdRef.current;
+
     setPhotosToast({ id, text });
+
     photosToastTimer.current = setTimeout(() => {
-      // Only dismiss if no newer toast has replaced this one.
       setPhotosToast((prev) => (prev && prev.id === id ? null : prev));
       photosToastTimer.current = null;
     }, PHOTOS_TOAST_MS);
@@ -516,7 +462,9 @@ export default function Stage() {
 
   const photosTakePhoto = () => {
     photosShowToast("Photo taken");
+
     const idx = ++photoCounterRef.current;
+
     const file: MediaFile = {
       id: `f${++fileIdRef.current}`,
       kind: "photo",
@@ -524,6 +472,7 @@ export default function Stage() {
       sizeBytes: PHOTO_SIZE_BYTES,
       createdAt: Date.now(),
     };
+
     setFiles((prev) => [...prev, file]);
   };
 
@@ -536,17 +485,18 @@ export default function Stage() {
   const photosStopRecording = () => {
     const start = photosRecordingStartRef.current;
     const elapsed = start != null ? Date.now() - start : 0;
+
     photosRecordingStartRef.current = null;
     setPhotosRecording(false);
     setPhotosRecordingMs(0);
     photosShowToast(`Video recorded · ${formatDuration(elapsed)}`);
+
     const idx = ++videoCounterRef.current;
+
     const file: MediaFile = {
       id: `f${++fileIdRef.current}`,
       kind: "video",
       name: `video_${idx}.mp4`,
-      // Always bill at least 1 byte so a 0-ms recording still produces
-      // something rather than an oddly empty entry.
       sizeBytes: Math.max(
         1,
         Math.round((elapsed / 1000) * VIDEO_BYTES_PER_SECOND),
@@ -554,29 +504,22 @@ export default function Stage() {
       createdAt: Date.now(),
       durationMs: elapsed,
     };
+
     setFiles((prev) => [...prev, file]);
   };
 
-  // Reliable click vs double-click discrimination:
-  // - measure time since last click; if it's within the dblclick window we
-  //   treat the gesture as a double-click and start recording immediately.
-  // - otherwise schedule a single-click action after the same window so a
-  //   late second click can still cancel/promote it.
-  // This avoids relying on the browser's `dblclick` event, which doesn't
-  // always fire (slight cursor drift, focus shifts) and races with `click`.
   const handlePhotoClick = () => {
     const now = Date.now();
     const sincePrev = now - photosLastClickAt.current;
+
     photosLastClickAt.current = now;
 
-    // While recording, a single click stops the video — no debounce delay,
-    // and reset the click clock so the *next* click isn't mis-read as the
-    // second half of a double-click.
     if (photosRecordingRef.current) {
       if (photosClickTimer.current) {
         clearTimeout(photosClickTimer.current);
         photosClickTimer.current = null;
       }
+
       photosStopRecording();
       photosLastClickAt.current = 0;
       return;
@@ -587,25 +530,28 @@ export default function Stage() {
         clearTimeout(photosClickTimer.current);
         photosClickTimer.current = null;
       }
+
       photosStartRecording();
       photosLastClickAt.current = 0;
       return;
     }
 
     if (photosClickTimer.current) clearTimeout(photosClickTimer.current);
+
     photosClickTimer.current = setTimeout(() => {
       photosClickTimer.current = null;
       photosTakePhoto();
     }, PHOTOS_DBLCLICK_MS);
   };
 
-  // Drive the recording stopwatch while we're actively recording.
   useEffect(() => {
     if (!photosRecording) return;
+
     const id = setInterval(() => {
       const start = photosRecordingStartRef.current;
       if (start != null) setPhotosRecordingMs(Date.now() - start);
     }, 100);
+
     return () => clearInterval(id);
   }, [photosRecording]);
 
@@ -621,13 +567,13 @@ export default function Stage() {
       clearTimeout(blurTimer.current);
       blurTimer.current = null;
     }
+
     setKeyboardVisible(true);
   };
 
   const handleInputBlur = () => {
-    // Defer hiding so a focus shift between the two mirrored inputs (or
-    // briefly losing focus to a key tap) doesn't flicker the keyboard.
     if (blurTimer.current) clearTimeout(blurTimer.current);
+
     blurTimer.current = setTimeout(() => {
       setKeyboardVisible(false);
       blurTimer.current = null;
@@ -635,25 +581,20 @@ export default function Stage() {
   };
 
   const handleAppOpen = (id: AppId) => {
-    // Switching out of the messenger should also dismiss the keyboard / mic.
     if (id !== "messages") {
       setKeyboardVisible(false);
       stopVoice();
     }
-    // Close the file viewer when leaving the Files app so coming back to it
-    // shows the grid rather than a stale viewer over the wrong context.
+
     if (id !== "files") {
       setOpenedFile(null);
     }
+
     setActiveApp(id);
   };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // Esc closes whichever overlay is on top: viewer first, then
-      // calibration mode. Calibration must be entered via the on-screen
-      // button — there's no global keyboard shortcut for it so a stray
-      // "C" while typing in the chat doesn't toggle into calibrate mode.
       if (e.key === "Escape") {
         if (openedFile) {
           setOpenedFile(null);
@@ -664,16 +605,18 @@ export default function Stage() {
         }
       }
     };
+
     window.addEventListener("keydown", onKey);
+
     return () => window.removeEventListener("keydown", onKey);
   }, [calibrating, openedFile]);
 
-  // Index of the currently-open file in the displayed (newest-first) order;
-  // -1 when the viewer is closed or the file has just been removed.
   const openedFileIndex = openedFile
     ? sortedFiles.findIndex((f) => f.id === openedFile.id)
     : -1;
+
   const hasPrevFile = openedFileIndex > 0;
+
   const hasNextFile =
     openedFileIndex !== -1 && openedFileIndex < sortedFiles.length - 1;
 
@@ -681,49 +624,54 @@ export default function Stage() {
     if (!hasPrevFile) return;
     setOpenedFile(sortedFiles[openedFileIndex - 1]);
   };
+
   const goToNextFile = () => {
     if (!hasNextFile) return;
     setOpenedFile(sortedFiles[openedFileIndex + 1]);
   };
 
-  // ←/→ steps through Home's tour cards. Active only when Home is the
-  // foreground app and nothing else (calibration, file viewer) wants the
-  // arrow keys for itself.
   useEffect(() => {
     if (activeApp !== "home" || calibrating || openedFile) return;
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+
       e.preventDefault();
+
       setHomeCardIndex((i) => {
         const max = HOME_CARD_COUNT - 1;
         if (e.key === "ArrowLeft") return Math.max(0, i - 1);
         return Math.min(max, i + 1);
       });
     };
+
     window.addEventListener("keydown", onKey);
+
     return () => window.removeEventListener("keydown", onKey);
   }, [activeApp, calibrating, openedFile]);
 
-  // ←/→ steps through the file list while the viewer is open. Suspended
-  // during calibration so it doesn't fight Block's own arrow-key handler.
   useEffect(() => {
     if (!openedFile || calibrating) return;
     if (sortedFiles.length === 0) return;
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+
       const idx = sortedFiles.findIndex((f) => f.id === openedFile.id);
       if (idx === -1) return;
+
       const nextIdx =
         e.key === "ArrowLeft"
           ? Math.max(0, idx - 1)
           : Math.min(sortedFiles.length - 1, idx + 1);
-      // Always swallow the key so the browser doesn't also scroll the page,
-      // even when we're at an edge and have nowhere to move.
+
       e.preventDefault();
+
       if (nextIdx !== idx) setOpenedFile(sortedFiles[nextIdx]);
     };
+
     window.addEventListener("keydown", onKey);
+
     return () => window.removeEventListener("keydown", onKey);
   }, [openedFile, calibrating, sortedFiles]);
 
@@ -731,13 +679,13 @@ export default function Stage() {
     if (calibrating) blockRef.current?.focus();
   }, [calibrating]);
 
-  // Shared dock visibility — when the cursor is near the bottom of either
-  // column, both docks open at once.
   useEffect(() => {
     const REVEAL_DISTANCE = 140;
+
     const onMove = (e: MouseEvent) => {
       const stage = stageRef.current;
       if (!stage) return;
+
       const r = stage.getBoundingClientRect();
       const lx = e.clientX - r.left;
       const ly = e.clientY - r.top;
@@ -745,9 +693,12 @@ export default function Stage() {
       const inStage = lx >= 0 && lx < 2 * COLUMN_WIDTH;
       const nearBottom =
         ly > COLUMN_HEIGHT - REVEAL_DISTANCE && ly < COLUMN_HEIGHT + 30;
+
       setDockActive(inStage && nearBottom);
     };
+
     window.addEventListener("mousemove", onMove);
+
     return () => window.removeEventListener("mousemove", onMove);
   }, []);
 
@@ -811,6 +762,7 @@ export default function Stage() {
     music: musicProps,
     home: homeProps,
   };
+
   const appContent = renderApp(activeApp, appCtx);
 
   return (
@@ -828,9 +780,6 @@ export default function Stage() {
         touchAction: "none",
       }}
     >
-      {/* Each ScreenScope binds every useTheme() call inside it to that
-          screen's palette, so the same component tree can render with two
-          independent colour adjustments. */}
       <ScreenScope screen="left">
         <Block
           ref={blockRef}
@@ -838,7 +787,6 @@ export default function Stage() {
           height={COLUMN_HEIGHT}
           enabled={calibrating}
           displayPosition={calibrating ? undefined : leftDisplayPos}
-          scale={calibrating ? 1 : UI_SCALE}
           onPositionChange={setScreenPos}
         >
           {calibrating ? <CalibrationMarker /> : appContent}
@@ -856,7 +804,6 @@ export default function Stage() {
           containerWidth={COLUMN_WIDTH}
           offsetX={leftOffsetX}
           offsetY={leftOffsetY}
-          scale={DOCK_SCALE}
           activeApp={activeApp}
           onOpen={handleAppOpen}
         />
@@ -881,15 +828,32 @@ export default function Stage() {
             <CalibrationMarker />
           </div>
         ) : (
-          <OffsetScreen
-            width={COLUMN_WIDTH}
-            height={COLUMN_HEIGHT}
-            offsetX={rightOffsetX}
-            offsetY={rightOffsetY}
-            scale={UI_SCALE}
+          <div
+            style={{
+              width: `${COLUMN_WIDTH}px`,
+              height: `${COLUMN_HEIGHT}px`,
+              overflow: "hidden",
+              overscrollBehavior: "none",
+              position: "relative",
+              touchAction: "none",
+              userSelect: "none",
+            }}
+            onWheel={(e) => e.preventDefault()}
           >
-            {appContent}
-          </OffsetScreen>
+            <div
+              style={{
+                position: "absolute",
+                left: `${CENTER_X + rightOffsetX}px`,
+                top: `${CENTER_Y + rightOffsetY}px`,
+                transform: "translate(-50%, -50%)",
+                transition:
+                  "left 180ms cubic-bezier(0.22, 1, 0.36, 1), top 180ms cubic-bezier(0.22, 1, 0.36, 1)",
+                willChange: "left, top",
+              }}
+            >
+              {appContent}
+            </div>
+          </div>
         )}
 
         <Dock
@@ -898,57 +862,10 @@ export default function Stage() {
           containerWidth={COLUMN_WIDTH}
           offsetX={rightOffsetX}
           offsetY={rightOffsetY}
-          scale={DOCK_SCALE}
           activeApp={activeApp}
           onOpen={handleAppOpen}
         />
       </ScreenScope>
-    </div>
-  );
-}
-
-function OffsetScreen({
-  width,
-  height,
-  offsetX,
-  offsetY,
-  scale = 1,
-  children,
-}: {
-  width: number;
-  height: number;
-  offsetX: number;
-  offsetY: number;
-  scale?: number;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        width: `${width}px`,
-        height: `${height}px`,
-        overflow: "hidden",
-        overscrollBehavior: "none",
-        position: "relative",
-        touchAction: "none",
-        userSelect: "none",
-      }}
-      onWheel={(e) => e.preventDefault()}
-    >
-      <div
-        style={{
-          position: "absolute",
-          left: `${width / 2 + offsetX}px`,
-          top: `${height / 2 + offsetY}px`,
-          transform: `translate(-50%, -50%) scale(${scale})`,
-          transformOrigin: "center center",
-          transition:
-            "left 180ms cubic-bezier(0.22, 1, 0.36, 1), top 180ms cubic-bezier(0.22, 1, 0.36, 1)",
-          willChange: "left, top",
-        }}
-      >
-        {children}
-      </div>
     </div>
   );
 }
@@ -981,8 +898,6 @@ function CalibrationControls({
         left: `${left}px`,
         zIndex: 10,
         padding: "16px",
-        // Discoverable hot zone in the bottom-left corner of each block,
-        // even when the calibrate button is invisible.
         width: "220px",
         height: "72px",
         boxSizing: "border-box",
@@ -1010,6 +925,7 @@ function CalibrateButton({
   const {
     palette: { c },
   } = useTheme();
+
   return (
     <button
       type="button"

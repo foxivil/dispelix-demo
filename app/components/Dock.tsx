@@ -10,7 +10,6 @@ type DockProps = {
   containerWidth: number;
   offsetX?: number;
   offsetY?: number;
-  scale?: number;
   activeApp?: AppId | null;
   onOpen?: (id: AppId) => void;
 };
@@ -26,7 +25,6 @@ export default function Dock({
   containerWidth,
   offsetX = 0,
   offsetY = 0,
-  scale = 1,
   activeApp = null,
   onOpen,
 }: DockProps) {
@@ -41,7 +39,7 @@ export default function Dock({
       aria-hidden={!active}
       style={{
         position: "absolute",
-        bottom: "16px",
+        bottom: "30px",
         left: `${containerLeft + containerWidth / 2}px`,
         transform: `translate(${offsetX}px, ${offsetY}px) translateX(-50%) translateY(${
           active ? 0 : 30
@@ -56,8 +54,6 @@ export default function Dock({
     >
       <div
         style={{
-          transform: `scale(${scale})`,
-          transformOrigin: "center bottom",
           display: "flex",
           alignItems: "flex-end",
           gap: `${ICON_GAP}px`,
