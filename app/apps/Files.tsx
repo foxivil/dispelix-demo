@@ -34,7 +34,7 @@ export type MediaFile = {
 };
 
 export type FilesProps = {
-  files: MediaFile[];
+  files?: MediaFile[];
   openedFile?: MediaFile | null;
   hasPrev?: boolean;
   hasNext?: boolean;
@@ -43,10 +43,11 @@ export type FilesProps = {
   onNext?: () => void;
   onClose?: () => void;
   videoSync?: VideoSync;
+  refreshKey?: number;
 };
 
 type FilesApiResponse = {
-  files: MediaFile[];
+  files?: MediaFile[];
 };
 
 export function formatBytes(bytes: number): string {
@@ -65,16 +66,17 @@ export function viewerSrcFor(file: MediaFile): string {
   return file.url ?? "";
 }
 
+function fileIdentityKey(file: MediaFile): string {
+  return file.url ?? file.name ?? file.id;
+}
+
 export default function Files({
-  files,
+  files = [],
   openedFile = null,
-  hasPrev = false,
-  hasNext = false,
   onOpen,
-  onPrev,
-  onNext,
   onClose,
   videoSync,
+  refreshKey = 0,
 }: FilesProps) {
   const {
     palette: { c },
@@ -98,10 +100,11 @@ export default function Files({
       }
 
       const data = (await response.json()) as FilesApiResponse;
-      setFolderFiles(data.files ?? []);
+      setFolderFiles(Array.isArray(data.files) ? data.files : []);
     } catch (error) {
       console.error(error);
       setLoadError("Could not load public/files");
+      setFolderFiles([]);
     } finally {
       setLoading(false);
     }
@@ -109,21 +112,48 @@ export default function Files({
 
   useEffect(() => {
     loadFolderFiles();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   const mergedFiles = useMemo(() => {
-    const byId = new Map<string, MediaFile>();
+    const byPath = new Map<string, MediaFile>();
 
-    for (const file of folderFiles) {
-      byId.set(file.id, file);
+    const safeRuntimeFiles = Array.isArray(files) ? files : [];
+    const safeFolderFiles = Array.isArray(folderFiles) ? folderFiles : [];
+
+    for (const file of safeRuntimeFiles) {
+      byPath.set(fileIdentityKey(file), file);
     }
 
-    for (const file of files) {
-      byId.set(file.id, file);
+    for (const file of safeFolderFiles) {
+      byPath.set(fileIdentityKey(file), file);
     }
 
-    return [...byId.values()].sort((a, b) => b.createdAt - a.createdAt);
-  }, [folderFiles, files]);
+    return [...byPath.values()].sort((a, b) => b.createdAt - a.createdAt);
+  }, [files, folderFiles]);
+
+  const openedFileIndex = useMemo(() => {
+    if (!openedFile) return -1;
+
+    const openedKey = fileIdentityKey(openedFile);
+
+    return mergedFiles.findIndex((file) => fileIdentityKey(file) === openedKey);
+  }, [mergedFiles, openedFile]);
+
+  const hasPrevFile = openedFileIndex > 0;
+
+  const hasNextFile =
+    openedFileIndex !== -1 && openedFileIndex < mergedFiles.length - 1;
+
+  const goToPrevFile = () => {
+    if (!hasPrevFile) return;
+    onOpen?.(mergedFiles[openedFileIndex - 1]);
+  };
+
+  const goToNextFile = () => {
+    if (!hasNextFile) return;
+    onOpen?.(mergedFiles[openedFileIndex + 1]);
+  };
 
   return (
     <div
@@ -209,6 +239,7 @@ export default function Files({
             style={{
               height: "100%",
               overflowY: "auto",
+              overflowX: "hidden",
               padding: "28px 32px",
               boxSizing: "border-box",
             }}
@@ -216,12 +247,18 @@ export default function Files({
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: "repeat(5, 1fr)",
+                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
                 gap: "20px",
+                width: "100%",
+                boxSizing: "border-box",
               }}
             >
               {mergedFiles.map((file) => (
-                <FileCell key={file.id} file={file} onOpen={onOpen} />
+                <FileCell
+                  key={fileIdentityKey(file)}
+                  file={file}
+                  onOpen={onOpen}
+                />
               ))}
             </div>
           </div>
@@ -231,10 +268,10 @@ export default function Files({
           <Viewer
             file={openedFile}
             onClose={onClose}
-            onPrev={onPrev}
-            onNext={onNext}
-            hasPrev={hasPrev}
-            hasNext={hasNext}
+            onPrev={goToPrevFile}
+            onNext={goToNextFile}
+            hasPrev={hasPrevFile}
+            hasNext={hasNextFile}
             videoSync={videoSync}
           />
         )}
@@ -268,21 +305,26 @@ function FileCell({
           onOpen?.(file);
         }
       }}
-      style={{ cursor: "pointer", outline: "none" }}
+      style={{
+        cursor: "pointer",
+        outline: "none",
+        minWidth: 0,
+        width: "100%",
+        boxSizing: "border-box",
+      }}
     >
       <div
         style={{
           position: "relative",
           width: "100%",
-          height: "130px",
+          aspectRatio: "16 / 9",
           borderRadius: "14px",
           overflow: "hidden",
           background: c("white", 0.06),
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
           color: c("white", 0.92),
           transition: "transform 140ms ease, box-shadow 140ms ease",
+          minWidth: 0,
+          boxSizing: "border-box",
         }}
       >
         {src ? (
@@ -294,6 +336,8 @@ function FileCell({
               src={src}
               alt={file.name}
               style={{
+                position: "absolute",
+                inset: 0,
                 width: "100%",
                 height: "100%",
                 objectFit: "cover",
@@ -302,9 +346,13 @@ function FileCell({
             />
           )
         ) : isVideo ? (
-          <VideoGlyph />
+          <CenteredGlyph>
+            <VideoGlyph />
+          </CenteredGlyph>
         ) : (
-          <PhotoGlyph />
+          <CenteredGlyph>
+            <PhotoGlyph />
+          </CenteredGlyph>
         )}
 
         {isVideo && (
@@ -370,6 +418,7 @@ function FileCell({
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
           fontVariantNumeric: "tabular-nums",
+          minWidth: 0,
         }}
         title={file.name}
       >
@@ -444,7 +493,7 @@ function VideoThumbnail({ src, name }: { src: string; name: string }) {
         aria-label={name}
         muted
         playsInline
-        preload="auto"
+        preload="metadata"
         onLoadedMetadata={(e) => {
           const video = e.currentTarget;
 
@@ -474,6 +523,8 @@ function VideoThumbnail({ src, name }: { src: string; name: string }) {
           setFailed(true);
         }}
         style={{
+          position: "absolute",
+          inset: 0,
           width: "100%",
           height: "100%",
           objectFit: "cover",
@@ -592,77 +643,85 @@ function Viewer({
           background: c("black"),
         }}
       >
-        <NavButton
-          direction="prev"
-          enabled={hasPrev}
-          onClick={() => onPrev?.()}
-        />
+        <NavButton direction="prev" enabled={hasPrev} onClick={onPrev} />
 
-        <NavButton
-          direction="next"
-          enabled={hasNext}
-          onClick={() => onNext?.()}
-        />
+        <NavButton direction="next" enabled={hasNext} onClick={onNext} />
 
-        {isVideo ? (
-          <video
-            key={file.id}
-            ref={videoRef}
-            src={src}
-            controls
-            autoPlay
-            playsInline
-            onPlay={(e) =>
-              videoSync?.broadcastPlayback(e.currentTarget, false)
-            }
-            onPause={(e) =>
-              videoSync?.broadcastPlayback(e.currentTarget, true)
-            }
-            onSeeked={(e) =>
-              videoSync?.broadcastTime(
-                e.currentTarget,
-                e.currentTarget.currentTime,
-              )
-            }
-            onTimeUpdate={(e) =>
-              videoSync?.broadcastTime(
-                e.currentTarget,
-                e.currentTarget.currentTime,
-              )
-            }
-            onVolumeChange={(e) =>
-              videoSync?.broadcastVolume(
-                e.currentTarget,
-                e.currentTarget.volume,
-                e.currentTarget.muted,
-              )
-            }
-            onRateChange={(e) =>
-              videoSync?.broadcastRate(
-                e.currentTarget,
-                e.currentTarget.playbackRate,
-              )
-            }
-            style={{
-              maxWidth: "100%",
-              maxHeight: "100%",
-              borderRadius: "10px",
-              background: c("black"),
-            }}
-          />
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            key={file.id}
-            src={src}
-            alt={file.name}
-            style={{
-              maxWidth: "100%",
-              maxHeight: "100%",
-              objectFit: "contain",
-            }}
-          />
-        )}
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            position: "relative",
+            overflow: "hidden",
+            borderRadius: "10px",
+            background: c("black"),
+          }}
+        >
+          {isVideo ? (
+            <video
+              key={fileIdentityKey(file)}
+              ref={videoRef}
+              src={src}
+              controls
+              autoPlay
+              playsInline
+              onPlay={(e) =>
+                videoSync?.broadcastPlayback(e.currentTarget, false)
+              }
+              onPause={(e) =>
+                videoSync?.broadcastPlayback(e.currentTarget, true)
+              }
+              onSeeked={(e) =>
+                videoSync?.broadcastTime(
+                  e.currentTarget,
+                  e.currentTarget.currentTime,
+                )
+              }
+              onTimeUpdate={(e) =>
+                videoSync?.broadcastTime(
+                  e.currentTarget,
+                  e.currentTarget.currentTime,
+                )
+              }
+              onVolumeChange={(e) =>
+                videoSync?.broadcastVolume(
+                  e.currentTarget,
+                  e.currentTarget.volume,
+                  e.currentTarget.muted,
+                )
+              }
+              onRateChange={(e) =>
+                videoSync?.broadcastRate(
+                  e.currentTarget,
+                  e.currentTarget.playbackRate,
+                )
+              }
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                background: c("black"),
+              }}
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={fileIdentityKey(file)}
+              src={src}
+              alt={file.name}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                display: "block",
+              }}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
@@ -675,7 +734,7 @@ function NavButton({
 }: {
   direction: "prev" | "next";
   enabled: boolean;
-  onClick: () => void;
+  onClick?: () => void;
 }) {
   const {
     palette: { c },
@@ -786,13 +845,27 @@ function EmptyState() {
         color: c("white", 0.7),
       }}
     >
-      <div style={{ fontSize: "56px", lineHeight: 1 }} aria-hidden>
-        📁
-      </div>
+      <PhotoGlyph />
       <div style={{ fontSize: "20px", fontWeight: 600 }}>No files yet</div>
       <div style={{ fontSize: "14px", color: c("white", 0.5) }}>
         Add photos or videos to public/files.
       </div>
+    </div>
+  );
+}
+
+function CenteredGlyph({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {children}
     </div>
   );
 }

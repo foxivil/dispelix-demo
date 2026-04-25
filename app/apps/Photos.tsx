@@ -15,8 +15,6 @@ export type PhotosProps = {
   recording: boolean;
   recordingMs: number;
   toast: PhotosToast | null;
-  // Animation duration for the toast (must match the timer that dismisses it
-  // in Stage so the CSS fade-in/out is in sync with state cleanup).
   toastDurationMs?: number;
   onClick: () => void;
 };
@@ -32,11 +30,12 @@ function GridOverlay() {
   const {
     palette: { c },
   } = useTheme();
+
   const lineStyle: CSSProperties = {
     position: "absolute",
     background: c("white", 0.3),
   };
-  // Edge-to-edge so the grid lines connect to the outer border.
+
   return (
     <div
       aria-hidden
@@ -92,6 +91,7 @@ export default function Photos({
   const {
     palette: { c },
   } = useTheme();
+
   return (
     <div
       style={{
@@ -113,7 +113,10 @@ export default function Photos({
           overflow: "hidden",
           background: c("black"),
           border: `1px solid ${c("white", 0.1)}`,
-          boxShadow: `inset 0 0 0 1px ${c("white", 0.04)}, 0 18px 48px ${c("black", 0.55)}`,
+          boxShadow: `inset 0 0 0 1px ${c(
+            "white",
+            0.04,
+          )}, 0 18px 48px ${c("black", 0.55)}`,
           cursor: "crosshair",
           userSelect: "none",
         }}
@@ -151,6 +154,7 @@ export default function Photos({
             />
             {recording ? "REC" : "Photo"}
           </div>
+
           <div
             style={{
               fontVariantNumeric: "tabular-nums",
@@ -182,8 +186,6 @@ export default function Photos({
         </div>
 
         {toast && (
-          // Outer wrapper handles horizontal centring via flex so the toast
-          // pill stays centred regardless of the animation transform inside.
           <div
             style={{
               position: "absolute",

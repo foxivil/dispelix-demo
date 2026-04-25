@@ -8,7 +8,6 @@ import {
   type MessengerProps,
 } from "../apps/Messenger";
 import {
-  formatDuration,
   type PhotosProps,
   type PhotosToast,
 } from "../apps/Photos";
@@ -80,6 +79,17 @@ type SpeechRecognitionInstance = {
 
 type SpeechRecognitionCtor = new () => SpeechRecognitionInstance;
 
+function uniqueMediaFilename(kind: "photo" | "video", extension: string): string {
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "");
+
+  const random = Math.random().toString(36).slice(2, 8);
+
+  return `${kind}_${timestamp}_${random}.${extension}`;
+}
+
 export default function Stage() {
   const {
     palette: { c },
@@ -132,7 +142,6 @@ export default function Stage() {
   const cameraRecordingStartedAtRef = useRef<number | null>(null);
 
   const [cameraReady, setCameraReady] = useState(false);
-  const [cameraDevices, setCameraDevices] = useState<CameraDevice[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     return window.localStorage.getItem(CAMERA_STORAGE_KEY);
@@ -144,8 +153,6 @@ export default function Stage() {
 
   const [files, setFiles] = useState<MediaFile[]>([]);
   const [openedFile, setOpenedFile] = useState<MediaFile | null>(null);
-  const photoCounterRef = useRef(0);
-  const videoCounterRef = useRef(0);
   const fileIdRef = useRef(0);
 
   const sortedFiles = useMemo(
@@ -165,6 +172,7 @@ export default function Stage() {
   const newMessageId = () => `msg-${++messageIdRef.current}`;
 
   const chatScrollers = useRef<Set<HTMLDivElement>>(new Set());
+
   const chatSync = useMemo<ChatSync>(
     () => ({
       register: (el) => {
@@ -185,6 +193,7 @@ export default function Stage() {
   );
 
   const videoTargets = useRef<Set<HTMLVideoElement>>(new Set());
+
   const videoSync = useMemo<VideoSync>(
     () => ({
       register: (el) => {
@@ -235,6 +244,7 @@ export default function Stage() {
   );
 
   const musicTargets = useRef<Set<HTMLAudioElement>>(new Set());
+
   const musicSync = useMemo<MusicSync>(
     () => ({
       register: (el) => {
@@ -587,8 +597,6 @@ export default function Stage() {
           label: device.label || `Camera ${index + 1}`,
         }));
 
-      setCameraDevices(videoInputs);
-
       if (videoInputs.length === 0) {
         setCameraReady(false);
         photosShowToast("No camera found");
@@ -618,24 +626,12 @@ export default function Stage() {
       setSelectedCameraId(likelyExternal.deviceId);
       window.localStorage.setItem(CAMERA_STORAGE_KEY, likelyExternal.deviceId);
 
-      photosShowToast(`Camera: ${likelyExternal.label}`);
-
       await openSelectedCamera(likelyExternal.deviceId);
     } catch (err) {
       console.error("Camera discovery failed", err);
       setCameraReady(false);
       photosShowToast("Camera discovery failed");
     }
-  };
-
-  const handleCameraSelect = async (deviceId: string) => {
-    setSelectedCameraId(deviceId);
-    window.localStorage.setItem(CAMERA_STORAGE_KEY, deviceId);
-
-    const camera = cameraDevices.find((item) => item.deviceId === deviceId);
-    if (camera) photosShowToast(`Camera: ${camera.label}`);
-
-    await openSelectedCamera(deviceId);
   };
 
   useEffect(() => {
@@ -686,17 +682,16 @@ export default function Stage() {
           return;
         }
 
-        const idx = ++photoCounterRef.current;
-        const filename = `photo_${idx}.jpg`;
+        const filename = uniqueMediaFilename("photo", "jpg");
 
         saveMediaToPublicImages(blob, filename)
-          .then(({ publicUrl }) => {
-            photosShowToast(`Saved ${filename}`);
+          .then(({ filename: savedFilename, publicUrl }) => {
+            photosShowToast("Photo saved");
 
             const file = {
-              id: `f${++fileIdRef.current}`,
+              id: publicUrl,
               kind: "photo",
-              name: filename,
+              name: savedFilename,
               sizeBytes: blob.size || PHOTO_SIZE_BYTES,
               createdAt: Date.now(),
               url: publicUrl,
@@ -754,20 +749,22 @@ export default function Stage() {
       setPhotosRecording(false);
       setPhotosRecordingMs(0);
 
-      const idx = ++videoCounterRef.current;
-      const filename = `video_${idx}.webm`;
+      const filename = uniqueMediaFilename("video", "webm");
 
       saveMediaToPublicImages(blob, filename)
-        .then(({ publicUrl }) => {
-          photosShowToast(`Saved ${filename}`);
+        .then(({ filename: savedFilename, publicUrl }) => {
+          photosShowToast("Video saved");
 
           const file = {
-            id: `f${++fileIdRef.current}`,
+            id: publicUrl,
             kind: "video",
-            name: filename,
+            name: savedFilename,
             sizeBytes:
               blob.size ||
-              Math.max(1, Math.round((elapsed / 1000) * VIDEO_BYTES_PER_SECOND)),
+              Math.max(
+                1,
+                Math.round((elapsed / 1000) * VIDEO_BYTES_PER_SECOND),
+              ),
             createdAt: Date.now(),
             durationMs: elapsed,
             url: publicUrl,
@@ -1091,79 +1088,6 @@ export default function Stage() {
           pointerEvents: "none",
         }}
       />
-
-      <div
-        style={{
-          position: "absolute",
-          top: "16px",
-          left: "16px",
-          zIndex: 50,
-          display: activeApp === "photos" ? "flex" : "none",
-          alignItems: "center",
-          gap: "8px",
-          padding: "8px 10px",
-          borderRadius: "12px",
-          background: c("black", 0.65),
-          border: `1px solid ${c("white", 0.16)}`,
-          backdropFilter: "blur(8px)",
-          WebkitBackdropFilter: "blur(8px)",
-          color: c("white"),
-          fontFamily:
-            "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
-          fontSize: "12px",
-        }}
-      >
-        <span style={{ color: c("white", 0.65) }}>Camera</span>
-
-        <select
-          value={selectedCameraId ?? ""}
-          onChange={(e) => handleCameraSelect(e.target.value)}
-          style={{
-            maxWidth: "260px",
-            background: c("black", 0.85),
-            color: c("white"),
-            border: `1px solid ${c("white", 0.18)}`,
-            borderRadius: "8px",
-            padding: "6px 8px",
-            font: "inherit",
-          }}
-        >
-          {cameraDevices.map((camera) => (
-            <option key={camera.deviceId} value={camera.deviceId}>
-              {camera.label}
-            </option>
-          ))}
-        </select>
-
-        <button
-          type="button"
-          onClick={discoverCameras}
-          style={{
-            background: c("white", 0.08),
-            color: c("white"),
-            border: `1px solid ${c("white", 0.16)}`,
-            borderRadius: "8px",
-            padding: "6px 8px",
-            font: "inherit",
-            cursor: "pointer",
-          }}
-        >
-          Refresh
-        </button>
-
-        <span
-          title={cameraReady ? "Camera ready" : "Camera not ready"}
-          style={{
-            width: "8px",
-            height: "8px",
-            borderRadius: "999px",
-            background: cameraReady ? c("white", 0.85) : c("redHot"),
-            boxShadow: cameraReady
-              ? `0 0 8px ${c("white", 0.65)}`
-              : `0 0 8px ${c("redHot", 0.8)}`,
-          }}
-        />
-      </div>
 
       <ScreenScope screen="left">
         <Block
