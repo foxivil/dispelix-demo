@@ -35,22 +35,29 @@ type Props = {
   width: number;
   height: number;
   enabled?: boolean;
+  displayPosition?: Position;
   onPositionChange?: (pos: Position) => void;
-  // The "app content" rendered at the calibrated position. Block is now
-  // content-agnostic: parent decides what to put here (calibration marker,
-  // messenger, placeholder, etc.).
   children?: ReactNode;
 };
 
 const Block = forwardRef<BlockHandle, Props>(function Block(
-  { width, height, enabled = true, onPositionChange, children },
+  {
+    width,
+    height,
+    enabled = true,
+    displayPosition,
+    onPositionChange,
+    children,
+  },
   ref,
 ) {
   const {
     palette: { c },
   } = useTheme();
+
   const blockRef = useRef<HTMLDivElement>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
+
   const [pos, setPos] = useState<Position>(() =>
     defaultCalibrationPos(width, height),
   );
@@ -77,14 +84,17 @@ const Block = forwardRef<BlockHandle, Props>(function Block(
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
     if (!enabled || !blockRef.current) return;
+
     const { x: cx, y: cy } = localCoords(e.clientX, e.clientY);
+
     const onScreen =
       Math.abs(cx - pos.x) <= SCREEN_SIZE / 2 &&
       Math.abs(cy - pos.y) <= SCREEN_SIZE / 2;
-    // grabbing the square preserves the grip point; clicking empty space centers on cursor
+
     dragOffset.current = onScreen
       ? { x: cx - pos.x, y: cy - pos.y }
       : { x: 0, y: 0 };
+
     setPos(clamp(cx - dragOffset.current.x, cy - dragOffset.current.y));
     setDragging(true);
     blockRef.current.setPointerCapture(e.pointerId);
@@ -93,12 +103,14 @@ const Block = forwardRef<BlockHandle, Props>(function Block(
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     if (!enabled || !dragging) return;
+
     const { x: cx, y: cy } = localCoords(e.clientX, e.clientY);
     setPos(clamp(cx - dragOffset.current.x, cy - dragOffset.current.y));
   };
 
   const endDrag = (e: PointerEvent<HTMLDivElement>) => {
     if (!dragging) return;
+
     setDragging(false);
     dragOffset.current = { x: 0, y: 0 };
     blockRef.current?.releasePointerCapture(e.pointerId);
@@ -106,9 +118,11 @@ const Block = forwardRef<BlockHandle, Props>(function Block(
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (!enabled) return;
+
     const step = e.shiftKey ? KEY_STEP_FAST : KEY_STEP;
     let dx = 0;
     let dy = 0;
+
     switch (e.key) {
       case "ArrowLeft":
         dx = -step;
@@ -129,6 +143,7 @@ const Block = forwardRef<BlockHandle, Props>(function Block(
       default:
         return;
     }
+
     e.preventDefault();
     setPos((p) => clamp(p.x + dx, p.y + dy));
   };
@@ -136,6 +151,10 @@ const Block = forwardRef<BlockHandle, Props>(function Block(
   const cursor = !enabled ? "default" : dragging ? "grabbing" : "grab";
   const outline =
     enabled && focused ? `1px solid ${c("white", 0.18)}` : "none";
+
+  // During calibration, render at the internal dragged position.
+  // After calibration, Stage may provide a smarter averaged display position.
+  const renderPos = displayPosition ?? pos;
 
   return (
     <div
@@ -166,9 +185,8 @@ const Block = forwardRef<BlockHandle, Props>(function Block(
       <div
         style={{
           position: "absolute",
-          left: `${pos.x}px`,
-          top: `${pos.y}px`,
-          // translate(-50%, -50%) keeps any-sized child centered on (pos.x, pos.y)
+          left: `${renderPos.x}px`,
+          top: `${renderPos.y}px`,
           transform: "translate(-50%, -50%)",
           transition: dragging
             ? "none"

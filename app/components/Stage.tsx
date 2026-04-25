@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { renderApp, type AppContext, type AppId } from "../apps/registry";
 import {
   type ChatMessage,
@@ -34,6 +34,10 @@ const COLUMN_WIDTH = 1280;
 const COLUMN_HEIGHT = 720;
 const CENTER_X = COLUMN_WIDTH / 2;
 const CENTER_Y = COLUMN_HEIGHT / 2;
+
+// Main size controls.
+const UI_SCALE = 0.86;
+const DOCK_SCALE = 0.86;
 
 const DEFAULT_APP: AppId = "messages";
 
@@ -78,14 +82,27 @@ export default function Stage() {
   const [calibrating, setCalibrating] = useState(false);
   const [dockActive, setDockActive] = useState(false);
   const [activeApp, setActiveApp] = useState<AppId>(DEFAULT_APP);
-  // Calibrated centre of the left block; used as an offset on the left dock
-  // so the dock travels with the rest of the calibrated content. Defaults to
-  // the bottom-right corner so calibration starts there.
+
+  // Calibrated centre of the left block. The difference from the true centre
+  // is split between the two screens after calibration:
+  // left gets +half the measured difference, right gets -half.
   const [screenPos, setScreenPos] = useState<Position>(() =>
     defaultCalibrationPos(COLUMN_WIDTH, COLUMN_HEIGHT),
   );
-  const offsetX = screenPos.x - CENTER_X;
-  const offsetY = screenPos.y - CENTER_Y;
+
+  const calibrationDiffX = screenPos.x - CENTER_X;
+  const calibrationDiffY = screenPos.y - CENTER_Y;
+
+  const leftOffsetX = calibrationDiffX / 2;
+  const leftOffsetY = calibrationDiffY / 2;
+
+  const rightOffsetX = -calibrationDiffX / 2;
+  const rightOffsetY = -calibrationDiffY / 2;
+
+  const leftDisplayPos: Position = {
+    x: CENTER_X + leftOffsetX,
+    y: CENTER_Y + leftOffsetY,
+  };
 
   // Messenger-specific shared state — kept here because both the left and
   // right column render the same messenger instance.
@@ -805,6 +822,10 @@ export default function Stage() {
         height: "720px",
         display: "flex",
         backgroundColor: c("black"),
+        overflow: "hidden",
+        overscrollBehavior: "none",
+        userSelect: "none",
+        touchAction: "none",
       }}
     >
       {/* Each ScreenScope binds every useTheme() call inside it to that
@@ -816,6 +837,8 @@ export default function Stage() {
           width={COLUMN_WIDTH}
           height={COLUMN_HEIGHT}
           enabled={calibrating}
+          displayPosition={calibrating ? undefined : leftDisplayPos}
+          scale={calibrating ? 1 : UI_SCALE}
           onPositionChange={setScreenPos}
         >
           {calibrating ? <CalibrationMarker /> : appContent}
@@ -831,35 +854,101 @@ export default function Stage() {
           active={dockActive && !calibrating}
           containerLeft={0}
           containerWidth={COLUMN_WIDTH}
-          offsetX={offsetX}
-          offsetY={offsetY}
+          offsetX={leftOffsetX}
+          offsetY={leftOffsetY}
+          scale={DOCK_SCALE}
           activeApp={activeApp}
           onOpen={handleAppOpen}
         />
       </ScreenScope>
 
       <ScreenScope screen="right">
-        <div
-          style={{
-            width: `${COLUMN_WIDTH}px`,
-            height: `${COLUMN_HEIGHT}px`,
-            overflow: "hidden",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          {calibrating ? <CalibrationMarker /> : appContent}
-        </div>
+        {calibrating ? (
+          <div
+            style={{
+              width: `${COLUMN_WIDTH}px`,
+              height: `${COLUMN_HEIGHT}px`,
+              overflow: "hidden",
+              overscrollBehavior: "none",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              userSelect: "none",
+              touchAction: "none",
+            }}
+            onWheel={(e) => e.preventDefault()}
+          >
+            <CalibrationMarker />
+          </div>
+        ) : (
+          <OffsetScreen
+            width={COLUMN_WIDTH}
+            height={COLUMN_HEIGHT}
+            offsetX={rightOffsetX}
+            offsetY={rightOffsetY}
+            scale={UI_SCALE}
+          >
+            {appContent}
+          </OffsetScreen>
+        )}
 
         <Dock
           active={dockActive && !calibrating}
           containerLeft={COLUMN_WIDTH}
           containerWidth={COLUMN_WIDTH}
+          offsetX={rightOffsetX}
+          offsetY={rightOffsetY}
+          scale={DOCK_SCALE}
           activeApp={activeApp}
           onOpen={handleAppOpen}
         />
       </ScreenScope>
+    </div>
+  );
+}
+
+function OffsetScreen({
+  width,
+  height,
+  offsetX,
+  offsetY,
+  scale = 1,
+  children,
+}: {
+  width: number;
+  height: number;
+  offsetX: number;
+  offsetY: number;
+  scale?: number;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        width: `${width}px`,
+        height: `${height}px`,
+        overflow: "hidden",
+        overscrollBehavior: "none",
+        position: "relative",
+        touchAction: "none",
+        userSelect: "none",
+      }}
+      onWheel={(e) => e.preventDefault()}
+    >
+      <div
+        style={{
+          position: "absolute",
+          left: `${width / 2 + offsetX}px`,
+          top: `${height / 2 + offsetY}px`,
+          transform: `translate(-50%, -50%) scale(${scale})`,
+          transformOrigin: "center center",
+          transition:
+            "left 180ms cubic-bezier(0.22, 1, 0.36, 1), top 180ms cubic-bezier(0.22, 1, 0.36, 1)",
+          willChange: "left, top",
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -897,6 +986,7 @@ function CalibrationControls({
         width: "220px",
         height: "72px",
         boxSizing: "border-box",
+        userSelect: "none",
       }}
     >
       <CalibrateButton
