@@ -37,6 +37,11 @@ export const TOKENS = {
   videoEnd: [30, 27, 75] as RGB, // #1e1b4b
   photoStart: [15, 118, 110] as RGB, // #0f766e
   photoEnd: [6, 78, 59] as RGB, // #064e3b
+  // Pure reference primaries used by the Settings preview swatches so that
+  // the effect of each per-channel multiplier is visually unambiguous.
+  refRed: [255, 0, 0] as RGB,
+  refGreen: [0, 255, 0] as RGB,
+  refBlue: [0, 0, 255] as RGB,
 } as const;
 
 export type TokenName = keyof typeof TOKENS;

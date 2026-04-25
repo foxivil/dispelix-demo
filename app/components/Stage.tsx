@@ -17,6 +17,9 @@ import {
   type MediaFile,
   type VideoSync,
 } from "../apps/Files";
+import { type MusicProps, type MusicSync } from "../apps/Music";
+import { type SearchProps } from "../apps/Search";
+import { HOME_CARD_COUNT, type HomeProps } from "../apps/Home";
 import { generateBotReply } from "../apps/botReplies";
 import Block, {
   defaultCalibrationPos,
@@ -25,7 +28,7 @@ import Block, {
 } from "./Block";
 import CalibrationMarker from "./CalibrationMarker";
 import Dock from "./Dock";
-import { useTheme } from "../theme/ThemeProvider";
+import { ScreenScope, useTheme } from "../theme/ThemeProvider";
 
 const COLUMN_WIDTH = 1280;
 const COLUMN_HEIGHT = 720;
@@ -97,7 +100,6 @@ export default function Stage() {
   // off these values so they always stay pixel-identical.
   const [photosRecording, setPhotosRecording] = useState(false);
   const [photosRecordingMs, setPhotosRecordingMs] = useState(0);
-  const [photosFlashKey, setPhotosFlashKey] = useState(0);
   const [photosToast, setPhotosToast] = useState<PhotosToast | null>(null);
   const photosRecordingStartRef = useRef<number | null>(null);
   // Mirrors photosRecording so the click handler always sees the latest
@@ -108,6 +110,22 @@ export default function Stage() {
   const photosToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const photosClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const photosLastClickAt = useRef(0);
+
+  // Search app shared state — the query lives in Stage so both columns of
+  // the dual screen stay in sync as the user types.
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Music app — shared in-progress scrub position so a drag on one screen
+  // moves the slider on the other in real time. `null` when nobody is
+  // currently scrubbing; the actual seek is committed on release through
+  // `musicSync` instead.
+  const [musicScrubTime, setMusicScrubTime] = useState<number | null>(null);
+
+  // Home app — index of the card currently shown in the on-boarding tour.
+  // Lifted into Stage so both screens always show the same card and the
+  // global ←/→ key handler below can drive it without each Home instance
+  // racing to update its own copy.
+  const [homeCardIndex, setHomeCardIndex] = useState(0);
 
   // Shared in-memory "filesystem" populated by the camera and read by the
   // Files app. Per-kind counters provide the photo_i / video_i naming.
@@ -130,6 +148,11 @@ export default function Stage() {
   const stageRef = useRef<HTMLDivElement>(null);
   const blurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  // Set when the operator wants the session terminated immediately (e.g. by
+  // clicking Send mid-recording). Late `onresult` / `onend` callbacks from
+  // the SpeechRecognition engine check this and bail out instead of
+  // re-populating the input with a partial transcript.
+  const voiceCancelledRef = useRef(false);
   const inputValueRef = useRef(inputValue);
   inputValueRef.current = inputValue;
   const messageIdRef = useRef(0);
@@ -219,6 +242,52 @@ export default function Stage() {
     [],
   );
 
+  // Sister hub for the Music app's two mirrored <audio> elements. Same
+  // tolerance pattern as videoSync — receivers ignore changes that are
+  // already close enough so that the broadcast↔receive loop converges
+  // instead of bouncing forever.
+  const musicTargets = useRef<Set<HTMLAudioElement>>(new Set());
+  const musicSync = useMemo<MusicSync>(
+    () => ({
+      register: (el) => {
+        musicTargets.current.add(el);
+      },
+      unregister: (el) => {
+        musicTargets.current.delete(el);
+      },
+      broadcastTime: (origin, currentTime) => {
+        musicTargets.current.forEach((el) => {
+          if (el === origin) return;
+          if (Math.abs(el.currentTime - currentTime) > 0.3) {
+            el.currentTime = currentTime;
+          }
+        });
+      },
+      broadcastPlayback: (origin, paused) => {
+        musicTargets.current.forEach((el) => {
+          if (el === origin) return;
+          if (el.paused !== paused) {
+            if (paused) {
+              el.pause();
+            } else {
+              el.play().catch(() => {
+                /* ignore — autoplay restrictions */
+              });
+            }
+          }
+        });
+      },
+      broadcastVolume: (origin, volume, muted) => {
+        musicTargets.current.forEach((el) => {
+          if (el === origin) return;
+          if (Math.abs(el.volume - volume) > 0.01) el.volume = volume;
+          if (el.muted !== muted) el.muted = muted;
+        });
+      },
+    }),
+    [],
+  );
+
   // Voice → typewriter state (refs so timers/handlers always see latest values)
   const voiceBaseRef = useRef(""); // input value at the moment recording started
   const voiceTargetRef = useRef(""); // latest combined transcript from the API
@@ -272,6 +341,9 @@ export default function Stage() {
     rec.lang = "en-US";
 
     rec.onresult = (e) => {
+      // If the session was cancelled (e.g. by Send), drop late results so we
+      // don't overwrite the freshly-cleared input with a partial transcript.
+      if (voiceCancelledRef.current) return;
       // Recompute the full transcript from all results in the current session;
       // interim entries update in place so summing always yields the latest text.
       let combined = "";
@@ -281,13 +353,23 @@ export default function Stage() {
       voiceTargetRef.current = combined.replace(/^\s+/, "");
     };
     rec.onend = () => {
-      // Flush any remaining un-typed characters so the input ends up complete.
+      if (voiceCancelledRef.current) {
+        // Cancelled mid-recording (e.g. Send was clicked). Just clean up the
+        // timers / state without flushing any pending transcript.
+        voiceCancelledRef.current = false;
+        stopTyping();
+        setIsRecording(false);
+        return;
+      }
+      // Normal stop: flush any remaining un-typed characters so the input ends
+      // up with the full transcript.
       voiceTypedRef.current = voiceTargetRef.current.length;
       renderVoice();
       stopTyping();
       setIsRecording(false);
     };
     rec.onerror = () => {
+      voiceCancelledRef.current = false;
       stopTyping();
       setIsRecording(false);
     };
@@ -333,18 +415,40 @@ export default function Stage() {
     setIsRecording(false);
   };
 
-  const handleSubmit = (value: string) => {
-    stopVoice();
-    // SpeechRecognition.stop() is async — its onend handler runs renderVoice()
-    // later and would otherwise re-populate the input from the cached
-    // transcript. Wipe the voice refs (and the synchronous inputValueRef)
-    // here so that any pending onend resolves to "" and matches the freshly
-    // cleared input.
+  // Hard-cancel the voice session: discard any buffered audio (`abort()`
+  // instead of `stop()`) and wipe all transcript state so the input stays
+  // exactly as we leave it. The cancellation flag also tells `onresult` /
+  // `onend` to ignore any late events the browser still fires after abort.
+  const cancelVoice = () => {
+    const rec = recognitionRef.current;
+    voiceCancelledRef.current = true;
     stopTyping();
     voiceBaseRef.current = "";
     voiceTargetRef.current = "";
     voiceTypedRef.current = 0;
+    setIsRecording(false);
+    if (!rec) {
+      voiceCancelledRef.current = false;
+      return;
+    }
+    try {
+      rec.abort();
+    } catch {
+      /* not running */
+    }
+  };
+
+  const handleSubmit = (value: string) => {
+    // Always cancel any active recording — clicking Send commits whatever's
+    // in the input now and ends the voice session, so late transcript
+    // fragments must not leak back into the cleared input.
+    cancelVoice();
     inputValueRef.current = "";
+    setInputValue("");
+
+    // An empty submission while recording is just "stop + clear" — don't
+    // append a blank user message or schedule a bot reply.
+    if (!value) return;
 
     const userMsg: ChatMessage = {
       id: newMessageId(),
@@ -352,7 +456,6 @@ export default function Stage() {
       text: value,
     };
     setMessages((prev) => [...prev, userMsg]);
-    setInputValue("");
 
     // Cancel any in-flight reply, then schedule a fresh one with a small
     // randomised delay so the bot feels like it's "typing".
@@ -395,7 +498,6 @@ export default function Stage() {
   };
 
   const photosTakePhoto = () => {
-    setPhotosFlashKey((k) => k + 1);
     photosShowToast("Photo taken");
     const idx = ++photoCounterRef.current;
     const file: MediaFile = {
@@ -531,12 +633,11 @@ export default function Stage() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "c" || e.key === "C") {
-        setCalibrating((v) => !v);
-        e.preventDefault();
-      } else if (e.key === "Escape") {
-        // Esc closes whichever overlay is on top: viewer first, then
-        // calibration mode.
+      // Esc closes whichever overlay is on top: viewer first, then
+      // calibration mode. Calibration must be entered via the on-screen
+      // button — there's no global keyboard shortcut for it so a stray
+      // "C" while typing in the chat doesn't toggle into calibrate mode.
+      if (e.key === "Escape") {
         if (openedFile) {
           setOpenedFile(null);
           e.preventDefault();
@@ -567,6 +668,24 @@ export default function Stage() {
     if (!hasNextFile) return;
     setOpenedFile(sortedFiles[openedFileIndex + 1]);
   };
+
+  // ←/→ steps through Home's tour cards. Active only when Home is the
+  // foreground app and nothing else (calibration, file viewer) wants the
+  // arrow keys for itself.
+  useEffect(() => {
+    if (activeApp !== "home" || calibrating || openedFile) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      setHomeCardIndex((i) => {
+        const max = HOME_CARD_COUNT - 1;
+        if (e.key === "ArrowLeft") return Math.max(0, i - 1);
+        return Math.min(max, i + 1);
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeApp, calibrating, openedFile]);
 
   // ←/→ steps through the file list while the viewer is open. Suspended
   // during calibration so it doesn't fight Block's own arrow-key handler.
@@ -634,7 +753,6 @@ export default function Stage() {
   const photosProps: PhotosProps = {
     recording: photosRecording,
     recordingMs: photosRecordingMs,
-    flashKey: photosFlashKey,
     toast: photosToast,
     toastDurationMs: PHOTOS_TOAST_MS,
     onClick: handlePhotoClick,
@@ -652,10 +770,29 @@ export default function Stage() {
     videoSync,
   };
 
+  const searchProps: SearchProps = {
+    query: searchQuery,
+    onQueryChange: setSearchQuery,
+  };
+
+  const musicProps: MusicProps = {
+    musicSync,
+    scrubTime: musicScrubTime,
+    onScrubTimeChange: setMusicScrubTime,
+  };
+
+  const homeProps: HomeProps = {
+    cardIndex: homeCardIndex,
+    onCardIndexChange: setHomeCardIndex,
+  };
+
   const appCtx: AppContext = {
     messenger: messengerProps,
     photos: photosProps,
     files: filesProps,
+    search: searchProps,
+    music: musicProps,
+    home: homeProps,
   };
   const appContent = renderApp(activeApp, appCtx);
 
@@ -670,51 +807,59 @@ export default function Stage() {
         backgroundColor: c("black"),
       }}
     >
-      <Block
-        ref={blockRef}
-        width={COLUMN_WIDTH}
-        height={COLUMN_HEIGHT}
-        enabled={calibrating}
-        onPositionChange={setScreenPos}
-      >
-        {calibrating ? <CalibrationMarker /> : appContent}
-      </Block>
+      {/* Each ScreenScope binds every useTheme() call inside it to that
+          screen's palette, so the same component tree can render with two
+          independent colour adjustments. */}
+      <ScreenScope screen="left">
+        <Block
+          ref={blockRef}
+          width={COLUMN_WIDTH}
+          height={COLUMN_HEIGHT}
+          enabled={calibrating}
+          onPositionChange={setScreenPos}
+        >
+          {calibrating ? <CalibrationMarker /> : appContent}
+        </Block>
 
-      <div
-        style={{
-          width: `${COLUMN_WIDTH}px`,
-          height: `${COLUMN_HEIGHT}px`,
-          overflow: "hidden",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {calibrating ? <CalibrationMarker /> : appContent}
-      </div>
+        <CalibrationControls
+          left={0}
+          active={calibrating}
+          onToggle={() => setCalibrating((v) => !v)}
+        />
 
-      <CalibrationControls
-        left={0}
-        active={calibrating}
-        onToggle={() => setCalibrating((v) => !v)}
-      />
+        <Dock
+          active={dockActive && !calibrating}
+          containerLeft={0}
+          containerWidth={COLUMN_WIDTH}
+          offsetX={offsetX}
+          offsetY={offsetY}
+          activeApp={activeApp}
+          onOpen={handleAppOpen}
+        />
+      </ScreenScope>
 
-      <Dock
-        active={dockActive && !calibrating}
-        containerLeft={0}
-        containerWidth={COLUMN_WIDTH}
-        offsetX={offsetX}
-        offsetY={offsetY}
-        activeApp={activeApp}
-        onOpen={handleAppOpen}
-      />
-      <Dock
-        active={dockActive && !calibrating}
-        containerLeft={COLUMN_WIDTH}
-        containerWidth={COLUMN_WIDTH}
-        activeApp={activeApp}
-        onOpen={handleAppOpen}
-      />
+      <ScreenScope screen="right">
+        <div
+          style={{
+            width: `${COLUMN_WIDTH}px`,
+            height: `${COLUMN_HEIGHT}px`,
+            overflow: "hidden",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {calibrating ? <CalibrationMarker /> : appContent}
+        </div>
+
+        <Dock
+          active={dockActive && !calibrating}
+          containerLeft={COLUMN_WIDTH}
+          containerWidth={COLUMN_WIDTH}
+          activeApp={activeApp}
+          onOpen={handleAppOpen}
+        />
+      </ScreenScope>
     </div>
   );
 }
@@ -819,7 +964,7 @@ function CalibrateButton({
           transition: "background 160ms ease, box-shadow 160ms ease",
         }}
       />
-      {active ? "Calibrating · Esc to exit" : "Calibrate (C)"}
+      {active ? "Calibrating · Esc to exit" : "Calibrate"}
     </button>
   );
 }

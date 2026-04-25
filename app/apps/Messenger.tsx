@@ -66,7 +66,10 @@ export default function Messenger({
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = value.trim();
-    if (!trimmed) return;
+    // Submit when there's something to send OR when a voice session is still
+    // active — clicking Send mid-recording should always stop the recording
+    // and clear the input, even if no transcript has arrived yet.
+    if (!trimmed && !isRecording) return;
     onSubmit?.(trimmed);
   };
 
@@ -388,6 +391,9 @@ function TypingBubble() {
   const {
     palette: { c },
   } = useTheme();
+  // Inline the dot colour so each screen's typing indicator follows its own
+  // R/G/B adjustment (CSS variables on :root would be shared globally).
+  const dotBg = c("white", 0.75);
   return (
     <div
       style={{
@@ -400,9 +406,9 @@ function TypingBubble() {
       aria-label="Bot is typing"
     >
       <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-        <span className="typing-dot" />
-        <span className="typing-dot" />
-        <span className="typing-dot" />
+        <span className="typing-dot" style={{ background: dotBg }} />
+        <span className="typing-dot" style={{ background: dotBg }} />
+        <span className="typing-dot" style={{ background: dotBg }} />
       </div>
     </div>
   );

@@ -1,14 +1,18 @@
 "use client";
 
 import { type CSSProperties } from "react";
-import { useTheme } from "../theme/ThemeProvider";
-import { TOKENS, type ColorAdjust, type TokenName } from "../theme/colors";
+import {
+  SCREEN_IDS,
+  useTheme,
+  type ScreenId,
+} from "../theme/ThemeProvider";
+import { type Palette, type TokenName } from "../theme/colors";
 
-const APP_WIDTH = 1120;
-const APP_HEIGHT = 640;
+const APP_WIDTH = 580;
+const APP_HEIGHT = 540;
 
 const SLIDER_MIN = 0;
-const SLIDER_MAX = 2;
+const SLIDER_MAX = 1;
 const SLIDER_STEP = 0.01;
 
 type Channel = "r" | "g" | "b";
@@ -19,33 +23,43 @@ const CHANNEL_LABELS: Record<Channel, string> = {
   b: "Blue",
 };
 
-// Tokens to highlight on the Settings page so the user can see how each
-// slider affects the rest of the app at a glance.
-const PREVIEW_TOKENS: ReadonlyArray<{ token: TokenName; label: string }> = [
-  { token: "white", label: "white" },
-  { token: "black", label: "black" },
-  { token: "red", label: "red" },
-  { token: "redDeep", label: "redDeep" },
-  { token: "redHot", label: "redHot" },
-  { token: "blue", label: "blue" },
-  { token: "videoStart", label: "videoStart" },
-  { token: "videoEnd", label: "videoEnd" },
-  { token: "photoStart", label: "photoStart" },
-  { token: "photoEnd", label: "photoEnd" },
-  { token: "panelDark", label: "panelDark" },
-  { token: "dockGray", label: "dockGray" },
+const SCREEN_LABELS: Record<ScreenId, string> = {
+  left: "Left screen",
+  right: "Right screen",
+};
+
+// Reference primaries shown above the sliders. Each Settings instance
+// renders these against *its own* screen's palette (the scope palette), so
+// the operator can see at a glance that adjusting one screen only affects
+// that screen — the other screen's swatches stay still.
+const REFERENCE_SWATCHES: ReadonlyArray<{
+  token: TokenName;
+  label: string;
+}> = [
+  { token: "white", label: "White" },
+  { token: "refBlue", label: "Blue" },
+  { token: "refGreen", label: "Green" },
+  { token: "refRed", label: "Red" },
 ];
 
 export default function Settings() {
   const {
     palette: { c },
-    adjust,
+    screen: scopeScreen,
+    adjusts,
+    selectedScreen,
+    setSelectedScreen,
     setAdjust,
     resetAdjust,
   } = useTheme();
 
+  // Sliders edit whichever screen the toggle has selected. The toggle is a
+  // global piece of state, so picking "Right" on either screen's Settings
+  // page sends both copies of the UI into right-screen edit mode.
+  const adjust = adjusts[selectedScreen];
+
   const update = (channel: Channel, value: number) =>
-    setAdjust({ ...adjust, [channel]: value });
+    setAdjust(selectedScreen, { ...adjust, [channel]: value });
 
   return (
     <div
@@ -63,70 +77,88 @@ export default function Settings() {
           display: "flex",
           alignItems: "baseline",
           justifyContent: "space-between",
-          padding: "0 6px 14px",
-          fontSize: "18px",
+          padding: "0 4px 10px",
+          fontSize: "13px",
           letterSpacing: "0.08em",
           textTransform: "uppercase",
-          color: c("white", 0.78),
+          color: c("white", 0.7),
         }}
       >
         <span>Settings · Colors</span>
-        <button
-          type="button"
-          onClick={resetAdjust}
-          style={{
-            fontSize: "12px",
-            letterSpacing: "0.04em",
-            textTransform: "uppercase",
-            padding: "6px 14px",
-            borderRadius: "999px",
-            border: `1px solid ${c("white", 0.18)}`,
-            background: c("white", 0.06),
-            color: c("white"),
-            cursor: "pointer",
-            fontFamily: "inherit",
-          }}
-        >
-          Reset
-        </button>
+        <span style={{ color: c("white", 0.45), fontSize: "11px" }}>
+          You are on the {SCREEN_LABELS[scopeScreen].toLowerCase()}
+        </span>
       </div>
 
       <div
         style={{
           width: `${APP_WIDTH}px`,
           height: `${APP_HEIGHT}px`,
-          borderRadius: "28px",
+          borderRadius: "20px",
           overflow: "hidden",
           background: c("black"),
           border: `1px solid ${c("white", 0.1)}`,
           boxShadow: `inset 0 0 0 1px ${c("white", 0.04)}, 0 18px 48px ${c("black", 0.55)}`,
-          padding: "32px 36px",
+          padding: "20px 24px",
           boxSizing: "border-box",
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1.05fr) minmax(0, 1fr)",
-          gap: "32px",
-          alignItems: "stretch",
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
         }}
       >
+        <ScreenPicker value={selectedScreen} onChange={setSelectedScreen} />
+
+        <ReferenceRow swatches={REFERENCE_SWATCHES} />
+
+        <div
+          style={{
+            height: "1px",
+            background: c("white", 0.08),
+            flexShrink: 0,
+          }}
+        />
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: "12px",
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            color: c("white", 0.55),
+          }}
+        >
+          <span>Editing · {SCREEN_LABELS[selectedScreen]}</span>
+          <button
+            type="button"
+            onClick={() => resetAdjust(selectedScreen)}
+            style={{
+              fontSize: "11px",
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              padding: "5px 12px",
+              borderRadius: "999px",
+              border: `1px solid ${c("white", 0.18)}`,
+              background: c("white", 0.06),
+              color: c("white"),
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            Reset
+          </button>
+        </div>
+
         <div
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: "22px",
+            gap: "14px",
+            flex: 1,
             justifyContent: "center",
           }}
         >
-          <div
-            style={{
-              fontSize: "13px",
-              color: c("white", 0.55),
-              letterSpacing: "0.04em",
-            }}
-          >
-            Adjust the per-channel multiplier applied to every colour token in
-            the app. 1.00 = unchanged.
-          </div>
-
           {(["r", "g", "b"] as Channel[]).map((ch) => (
             <ChannelSlider
               key={ch}
@@ -136,45 +168,195 @@ export default function Settings() {
             />
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
 
-        <div
+function ScreenPicker({
+  value,
+  onChange,
+}: {
+  value: ScreenId;
+  onChange: (next: ScreenId) => void;
+}) {
+  const {
+    palette: { c },
+    palettes,
+  } = useTheme();
+  return (
+    <div
+      role="tablist"
+      aria-label="Choose screen to edit"
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(${SCREEN_IDS.length}, 1fr)`,
+        gap: "8px",
+        padding: "4px",
+        borderRadius: "12px",
+        background: c("white", 0.04),
+        border: `1px solid ${c("white", 0.08)}`,
+        flexShrink: 0,
+      }}
+    >
+      {SCREEN_IDS.map((screen) => {
+        const selected = screen === value;
+        // Per-screen accent built from each screen's own palette so that the
+        // tabs themselves visualise that the two palettes are independent.
+        const accent = palettes[screen].c("red");
+        return (
+          <button
+            key={screen}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            onClick={() => onChange(screen)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "10px",
+              padding: "10px 14px",
+              borderRadius: "9px",
+              border: selected
+                ? `1px solid ${c("white", 0.28)}`
+                : "1px solid transparent",
+              background: selected ? c("white", 0.1) : "transparent",
+              color: c("white", selected ? 1 : 0.65),
+              cursor: "pointer",
+              fontFamily: "inherit",
+              fontSize: "13px",
+              letterSpacing: "0.02em",
+              fontWeight: selected ? 600 : 400,
+              transition:
+                "background 140ms ease, color 140ms ease, border-color 140ms ease",
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: "10px",
+                height: "10px",
+                borderRadius: "999px",
+                background: accent,
+                boxShadow: `0 0 6px ${accent}`,
+                flexShrink: 0,
+              }}
+            />
+            {SCREEN_LABELS[screen]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReferenceRow({
+  swatches,
+}: {
+  swatches: ReadonlyArray<{ token: TokenName; label: string }>;
+}) {
+  const {
+    palette,
+    palette: { c },
+    screen,
+  } = useTheme();
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "8px",
+        flexShrink: 0,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          fontSize: "11px",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          color: c("white", 0.5),
+        }}
+      >
+        <span>Reference · {SCREEN_LABELS[screen]}</span>
+        <span style={{ color: c("white", 0.35) }}>actual output</span>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${swatches.length}, 1fr)`,
+          gap: "10px",
+        }}
+      >
+        {swatches.map(({ token, label }) => (
+          <ReferenceSwatch
+            key={token}
+            token={token}
+            label={label}
+            palette={palette}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReferenceSwatch({
+  token,
+  label,
+  palette,
+}: {
+  token: TokenName;
+  label: string;
+  palette: Palette;
+}) {
+  const {
+    palette: { c },
+  } = useTheme();
+  // Always show the *scope* palette's value, not the selected screen's, so
+  // that each physical screen's Settings page mirrors what that screen is
+  // actually outputting. This makes the per-screen separation obvious.
+  const [r, g, b] = palette.raw[token];
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "stretch",
+        gap: "6px",
+      }}
+    >
+      <div
+        style={{
+          height: "44px",
+          borderRadius: "10px",
+          background: palette.c(token),
+          border: `1px solid ${c("white", 0.12)}`,
+        }}
+      />
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: "1px",
+        }}
+      >
+        <span style={{ fontSize: "12px", color: c("white", 0.85) }}>
+          {label}
+        </span>
+        <span
           style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-            minHeight: 0,
+            fontSize: "10px",
+            color: c("white", 0.45),
+            fontVariantNumeric: "tabular-nums",
           }}
         >
-          <div
-            style={{
-              fontSize: "13px",
-              color: c("white", 0.55),
-              letterSpacing: "0.04em",
-              textTransform: "uppercase",
-            }}
-          >
-            Live palette
-          </div>
-          <div
-            style={{
-              flex: 1,
-              minHeight: 0,
-              overflowY: "auto",
-              borderRadius: "16px",
-              background: c("white", 0.03),
-              border: `1px solid ${c("white", 0.08)}`,
-              padding: "12px",
-              display: "grid",
-              gridTemplateColumns: "repeat(2, 1fr)",
-              gap: "10px",
-              alignContent: "start",
-            }}
-          >
-            {PREVIEW_TOKENS.map(({ token, label }) => (
-              <Swatch key={token} token={token} label={label} adjust={adjust} />
-            ))}
-          </div>
-        </div>
+          {r}, {g}, {b}
+        </span>
       </div>
     </div>
   );
@@ -192,8 +374,8 @@ function ChannelSlider({
   const {
     palette: { c },
   } = useTheme();
-  // Per-channel pure-colour swatch so the slider's identity is unambiguous.
-  // Always shows the saturated channel regardless of current adjustment.
+  // Pure-colour pip per channel so the slider's identity is unambiguous
+  // regardless of the current adjustment values.
   const swatch =
     channel === "r"
       ? "rgb(255, 80, 80)"
@@ -202,13 +384,13 @@ function ChannelSlider({
         : "rgb(80, 140, 255)";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
       <div
         style={{
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          fontSize: "14px",
+          fontSize: "13px",
           color: c("white", 0.85),
         }}
       >
@@ -229,7 +411,7 @@ function ChannelSlider({
           style={{
             fontVariantNumeric: "tabular-nums",
             color: c("white", 0.6),
-            fontSize: "13px",
+            fontSize: "12px",
           }}
         >
           ×{value.toFixed(2)}
@@ -245,83 +427,12 @@ function ChannelSlider({
         style={
           {
             width: "100%",
-            // Enough room for the larger thumb defined below.
-            height: "26px",
-            // Keep the thumb visually aligned with the per-channel accent.
+            height: "22px",
             accentColor: swatch,
             cursor: "pointer",
           } satisfies CSSProperties
         }
       />
-    </div>
-  );
-}
-
-function Swatch({
-  token,
-  label,
-  adjust,
-}: {
-  token: TokenName;
-  label: string;
-  adjust: ColorAdjust;
-}) {
-  const {
-    palette: { c, raw },
-  } = useTheme();
-  const base = TOKENS[token];
-  const adjusted = raw[token];
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        padding: "6px 8px",
-        borderRadius: "10px",
-        background: c("white", 0.03),
-        border: `1px solid ${c("white", 0.06)}`,
-      }}
-      title={`${label}\nbase  rgb(${base[0]}, ${base[1]}, ${base[2]})\nadj.  rgb(${adjusted[0]}, ${adjusted[1]}, ${adjusted[2]})\n×R${adjust.r.toFixed(2)} ×G${adjust.g.toFixed(2)} ×B${adjust.b.toFixed(2)}`}
-    >
-      <div
-        style={{
-          width: "30px",
-          height: "30px",
-          borderRadius: "8px",
-          background: c(token),
-          border: `1px solid ${c("white", 0.12)}`,
-          flexShrink: 0,
-        }}
-      />
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          minWidth: 0,
-        }}
-      >
-        <span
-          style={{
-            fontSize: "12px",
-            color: c("white", 0.85),
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {label}
-        </span>
-        <span
-          style={{
-            fontSize: "10px",
-            color: c("white", 0.45),
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {adjusted[0]}, {adjusted[1]}, {adjusted[2]}
-        </span>
-      </div>
     </div>
   );
 }

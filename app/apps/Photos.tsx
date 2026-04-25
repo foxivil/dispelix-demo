@@ -14,7 +14,6 @@ export type PhotosToast = {
 export type PhotosProps = {
   recording: boolean;
   recordingMs: number;
-  flashKey: number;
   toast: PhotosToast | null;
   // Animation duration for the toast (must match the timer that dismisses it
   // in Stage so the CSS fade-in/out is in sync with state cleanup).
@@ -86,7 +85,6 @@ function GridOverlay() {
 export default function Photos({
   recording,
   recordingMs,
-  flashKey,
   toast,
   toastDurationMs = 2000,
   onClick,
@@ -183,46 +181,38 @@ export default function Photos({
             : "Tap to capture · Double-tap to record"}
         </div>
 
-        {/* Shutter flash — keyed so each click retriggers the animation.
-            Namespaced so it can't collide with the toast's key (both counters
-            start at 0). */}
-        <span
-          key={`flash-${flashKey}`}
-          aria-hidden
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: c("white"),
-            pointerEvents: "none",
-            opacity: 0,
-            animation: flashKey
-              ? "photos-shutter 280ms ease-out forwards"
-              : "none",
-          }}
-        />
-
         {toast && (
+          // Outer wrapper handles horizontal centring via flex so the toast
+          // pill stays centred regardless of the animation transform inside.
           <div
-            key={`toast-${toast.id}`}
             style={{
               position: "absolute",
-              left: "50%",
+              left: 0,
+              right: 0,
               bottom: "70px",
-              padding: "12px 22px",
-              borderRadius: "999px",
-              background: c("black", 0.7),
-              border: `1px solid ${c("white", 0.14)}`,
-              backdropFilter: "blur(8px)",
-              WebkitBackdropFilter: "blur(8px)",
-              fontSize: "18px",
-              letterSpacing: "0.01em",
-              color: c("white"),
-              animation: `photos-toast ${toastDurationMs}ms ease forwards`,
+              display: "flex",
+              justifyContent: "center",
               pointerEvents: "none",
-              whiteSpace: "nowrap",
             }}
           >
-            {toast.text}
+            <div
+              key={`toast-${toast.id}`}
+              style={{
+                padding: "12px 22px",
+                borderRadius: "999px",
+                background: c("black", 0.7),
+                border: `1px solid ${c("white", 0.14)}`,
+                backdropFilter: "blur(8px)",
+                WebkitBackdropFilter: "blur(8px)",
+                fontSize: "18px",
+                letterSpacing: "0.01em",
+                color: c("white"),
+                animation: `photos-toast-fade ${toastDurationMs}ms ease forwards`,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {toast.text}
+            </div>
           </div>
         )}
       </div>

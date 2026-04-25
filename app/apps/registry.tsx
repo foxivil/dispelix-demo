@@ -1,11 +1,11 @@
 "use client";
 
 import Files, { type FilesProps } from "./Files";
-import Home from "./Home";
+import Home, { type HomeProps } from "./Home";
 import Messenger, { type MessengerProps } from "./Messenger";
-import Music from "./Music";
+import Music, { type MusicProps } from "./Music";
 import Photos, { type PhotosProps } from "./Photos";
-import Search from "./Search";
+import Search, { type SearchProps } from "./Search";
 import Settings from "./Settings";
 
 export type AppId =
@@ -40,6 +40,9 @@ export type AppContext = {
   messenger: MessengerProps;
   photos: PhotosProps;
   files: FilesProps;
+  search: SearchProps;
+  music: MusicProps;
+  home: HomeProps;
 };
 
 export function renderApp(id: AppId, ctx: AppContext) {
@@ -47,13 +50,13 @@ export function renderApp(id: AppId, ctx: AppContext) {
     case "messages":
       return <Messenger {...ctx.messenger} />;
     case "home":
-      return <Home />;
+      return <Home {...ctx.home} />;
     case "files":
       return <Files {...ctx.files} />;
     case "search":
-      return <Search />;
+      return <Search {...ctx.search} />;
     case "music":
-      return <Music />;
+      return <Music {...ctx.music} />;
     case "photos":
       return <Photos {...ctx.photos} />;
     case "settings":

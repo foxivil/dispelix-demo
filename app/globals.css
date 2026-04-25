@@ -38,8 +38,10 @@ body {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  /* Driven by ThemeProvider so the dot follows the R/G/B sliders. */
-  background: var(--color-typing-dot, rgba(255, 255, 255, 0.75));
+  /* Background colour is set inline by <TypingBubble> using the current
+     screen's palette so each screen can use its own colour adjustments. The
+     value below is just a fallback for any usage outside the React tree. */
+  background: rgba(255, 255, 255, 0.75);
   animation: typing-dot-pulse 1.2s infinite ease-in-out;
 }
 
@@ -52,15 +54,6 @@ body {
 }
 
 /* Photos camera viewfinder animations. */
-@keyframes photos-shutter {
-  0% {
-    opacity: 0.95;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
 @keyframes photos-rec-pulse {
   0%,
   100% {
@@ -71,21 +64,36 @@ body {
   }
 }
 
-@keyframes photos-toast {
+/* Pure vertical/opacity fade — horizontal centring is handled by a flex
+   wrapper around the toast so the X axis isn't affected by the animation. */
+@keyframes photos-toast-fade {
   0% {
     opacity: 0;
-    transform: translate(-50%, 8px);
+    transform: translateY(8px);
   }
   12% {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translateY(0);
   }
   80% {
     opacity: 1;
-    transform: translate(-50%, 0);
+    transform: translateY(0);
   }
   100% {
     opacity: 0;
-    transform: translate(-50%, -4px);
+    transform: translateY(-4px);
+  }
+}
+
+/* Home tour cards — gentle fade + lift each time the user navigates so the
+   transition between instructions feels intentional rather than instant. */
+@keyframes home-card-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
   }
 }

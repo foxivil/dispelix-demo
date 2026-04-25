@@ -3,7 +3,6 @@
 import {
   createContext,
   useContext,
-  useEffect,
   useMemo,
   useState,
   type ReactNode,
@@ -13,52 +12,60 @@ import {
   DEFAULT_ADJUST,
   type ColorAdjust,
   type Palette,
-  type TokenName,
 } from "./colors";
 
+// The two physical screens that make up the dual-column stage. Each one has
+// its own colour adjustment so the operator can compensate for a different
+// projector / panel.
+export type ScreenId = "left" | "right";
+export const SCREEN_IDS: readonly ScreenId[] = ["left", "right"];
+
+type Adjusts = Record<ScreenId, ColorAdjust>;
+type Palettes = Record<ScreenId, Palette>;
+
 type ThemeContextValue = {
-  palette: Palette;
-  adjust: ColorAdjust;
-  setAdjust: (next: ColorAdjust) => void;
-  resetAdjust: () => void;
+  adjusts: Adjusts;
+  palettes: Palettes;
+  // Which screen the Settings UI is currently editing. Lifted here so that
+  // both mirrored Settings instances stay in sync.
+  selectedScreen: ScreenId;
+  setSelectedScreen: (s: ScreenId) => void;
+  setAdjust: (screen: ScreenId, next: ColorAdjust) => void;
+  resetAdjust: (screen: ScreenId) => void;
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
-
-// Tokens that need to be reachable from plain CSS (globals.css) — published
-// as CSS custom properties whenever the theme is rebuilt. Inline styles in
-// React components keep using palette.c() directly.
-const CSS_VAR_TOKENS: ReadonlyArray<{
-  token: TokenName;
-  alpha: number;
-  varName: string;
-}> = [
-  { token: "white", alpha: 0.75, varName: "--color-typing-dot" },
-];
+// Default scope is "left" so any component rendered outside an explicit
+// <ScreenScope> still gets a valid palette (e.g. during tests / Storybook).
+const ScreenScopeContext = createContext<ScreenId>("left");
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [adjust, setAdjust] = useState<ColorAdjust>(DEFAULT_ADJUST);
-  // Recomputing the palette on every render is cheap (a dozen channel mults)
-  // but doing it via useMemo means consumers see referentially stable values
-  // when adjust hasn't changed.
-  const palette = useMemo(() => buildPalette(adjust), [adjust]);
+  const [adjusts, setAdjusts] = useState<Adjusts>({
+    left: DEFAULT_ADJUST,
+    right: DEFAULT_ADJUST,
+  });
+  const [selectedScreen, setSelectedScreen] = useState<ScreenId>("left");
 
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const root = document.documentElement;
-    CSS_VAR_TOKENS.forEach(({ token, alpha, varName }) => {
-      root.style.setProperty(varName, palette.c(token, alpha));
-    });
-  }, [palette]);
+  const palettes = useMemo<Palettes>(
+    () => ({
+      left: buildPalette(adjusts.left),
+      right: buildPalette(adjusts.right),
+    }),
+    [adjusts],
+  );
 
   const value = useMemo<ThemeContextValue>(
     () => ({
-      palette,
-      adjust,
-      setAdjust,
-      resetAdjust: () => setAdjust(DEFAULT_ADJUST),
+      adjusts,
+      palettes,
+      selectedScreen,
+      setSelectedScreen,
+      setAdjust: (screen, next) =>
+        setAdjusts((prev) => ({ ...prev, [screen]: next })),
+      resetAdjust: (screen) =>
+        setAdjusts((prev) => ({ ...prev, [screen]: DEFAULT_ADJUST })),
     }),
-    [palette, adjust],
+    [adjusts, palettes, selectedScreen],
   );
 
   return (
@@ -66,10 +73,50 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useTheme(): ThemeContextValue {
-  const v = useContext(ThemeContext);
-  if (!v) {
+// Wrap a subtree to bind every `useTheme()` call inside it to a specific
+// screen's palette. ScreenScope produces no DOM of its own.
+export function ScreenScope({
+  screen,
+  children,
+}: {
+  screen: ScreenId;
+  children: ReactNode;
+}) {
+  return (
+    <ScreenScopeContext.Provider value={screen}>
+      {children}
+    </ScreenScopeContext.Provider>
+  );
+}
+
+export type ThemeApi = {
+  // Current scope's palette + screen id — what regular components consume.
+  screen: ScreenId;
+  palette: Palette;
+  // Global theme controls — everything below is the same value regardless of
+  // which scope you're inside, so the Settings UI can edit either screen.
+  adjusts: Adjusts;
+  palettes: Palettes;
+  selectedScreen: ScreenId;
+  setSelectedScreen: (s: ScreenId) => void;
+  setAdjust: (screen: ScreenId, next: ColorAdjust) => void;
+  resetAdjust: (screen: ScreenId) => void;
+};
+
+export function useTheme(): ThemeApi {
+  const ctx = useContext(ThemeContext);
+  if (!ctx) {
     throw new Error("useTheme must be used inside <ThemeProvider>");
   }
-  return v;
+  const screen = useContext(ScreenScopeContext);
+  return {
+    screen,
+    palette: ctx.palettes[screen],
+    adjusts: ctx.adjusts,
+    palettes: ctx.palettes,
+    selectedScreen: ctx.selectedScreen,
+    setSelectedScreen: ctx.setSelectedScreen,
+    setAdjust: ctx.setAdjust,
+    resetAdjust: ctx.resetAdjust,
+  };
 }
