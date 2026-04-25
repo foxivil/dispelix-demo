@@ -1,6 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ComponentType } from "react";
+import {
+  AppWindow,
+  Camera,
+  Folder,
+  Home,
+  MessageCircle,
+  Music,
+  Search,
+  type LucideProps,
+} from "lucide-react";
 import { APPS, type AppId } from "../apps/registry";
 import { useTheme } from "../theme/ThemeProvider";
 
@@ -18,6 +28,15 @@ const ICON_SIZE = 52;
 const ICON_GAP = 8;
 const PAD_X = 16;
 const PAD_Y = 10;
+
+const ICONS: Partial<Record<AppId, ComponentType<LucideProps>>> = {
+  home: Home,
+  messages: MessageCircle,
+  photos: Camera,
+  files: Folder,
+  search: Search,
+  music: Music,
+};
 
 export default function Dock({
   active,
@@ -75,6 +94,7 @@ export default function Dock({
         {APPS.map((app) => {
           const isHovered = hoveredId === app.id;
           const isActive = activeApp === app.id;
+          const Icon = ICONS[app.id] ?? AppWindow;
 
           return (
             <button
@@ -96,47 +116,65 @@ export default function Dock({
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontSize: `${ICON_SIZE * 0.55}px`,
-                lineHeight: 1,
-                borderRadius: "13px",
+                borderRadius: "15px",
                 background:
                   isHovered || isActive
-                    ? `linear-gradient(180deg, ${c("white", 0.28)}, ${c(
+                    ? `linear-gradient(180deg, ${c("white", 0.3)}, ${c(
                         "white",
-                        0.1,
+                        0.12,
                       )})`
-                    : `linear-gradient(180deg, ${c("white", 0.18)}, ${c(
+                    : `linear-gradient(180deg, ${c("white", 0.16)}, ${c(
                         "white",
                         0.04,
                       )})`,
                 border: `1px solid ${c(
                   "white",
-                  isHovered || isActive ? 0.32 : 0.18,
+                  isHovered || isActive ? 0.34 : 0.16,
                 )}`,
-                color: c("white"),
+                color: c("white", isActive ? 1 : 0.88),
                 cursor: "pointer",
-                transition: "background 140ms ease, border-color 140ms ease",
+                transition:
+                  "background 140ms ease, border-color 140ms ease, transform 140ms ease, color 140ms ease",
+                transform:
+                  isHovered || isActive ? "translateY(-4px)" : "translateY(0)",
                 flexShrink: 0,
                 fontFamily: "inherit",
                 padding: 0,
                 userSelect: "none",
+                boxShadow:
+                  isHovered || isActive
+                    ? `0 8px 20px ${c("black", 0.35)}, inset 0 1px 0 ${c(
+                        "white",
+                        0.16,
+                      )}`
+                    : `inset 0 1px 0 ${c("white", 0.08)}`,
               }}
             >
-              <span aria-hidden>{app.emoji}</span>
+              <Icon
+                size={26}
+                strokeWidth={2.1}
+                aria-hidden
+                style={{
+                  filter:
+                    isHovered || isActive
+                      ? `drop-shadow(0 0 6px ${c("white", 0.25)})`
+                      : "none",
+                }}
+              />
 
               {isActive && (
                 <span
                   aria-hidden
                   style={{
                     position: "absolute",
-                    bottom: "-6px",
+                    bottom: "-7px",
                     left: "50%",
                     transform: "translateX(-50%)",
-                    width: "4px",
-                    height: "4px",
+                    width: "5px",
+                    height: "5px",
                     borderRadius: "999px",
-                    background: c("white", 0.85),
-                    boxShadow: `0 0 6px ${c("white", 0.5)}`,
+                    background: c("white", 0.9),
+                    boxShadow: `0 0 8px ${c("white", 0.65)}`,
                   }}
                 />
               )}

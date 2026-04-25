@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -12,24 +13,26 @@ import { useTheme } from "../theme/ThemeProvider";
 import { formatDuration } from "./Photos";
 
 const APP_WIDTH = 520;
-// Pixel size of the album-art square. Kept compact (and in a horizontal
-// row with the track info) so the whole player stays well clear of the
-// dock at the bottom of the screen.
 const COVER_SIZE = 160;
-
-const TRACK_SRC =
-  "/music/locomotion-soundtrack_cruel-angel-s-thesis-neon-genesis-evangelion-op.mp3";
-const COVER_SRC = "/music_image/cover.jpg";
-const TRACK_TITLE = "A Cruel Angel's Thesis";
-const TRACK_ARTIST = "Yoko Takahashi";
-const TRACK_ALBUM = "Neon Genesis Evangelion · Opening Theme";
-
+const PLAYLIST_SRC = "/music/playlist.json";
 const SEEK_STEP_S = 10;
+
+type PlaylistTrack = {
+  title: string;
+  artist: string;
+  album: string;
+  src: string;
+  cover: string;
+};
+
+type TrackChangeEventDetail = {
+  index: number;
+};
+
+const MUSIC_TRACK_CHANGE_EVENT = "ar-music-track-change";
 
 // Sync hub interface — both mirrored <audio> elements register here so that
 // play/pause/seek/volume on one screen mirrors to the other in near real-time.
-// Mirrors `VideoSync` over in Files.tsx but typed for HTMLAudioElement so the
-// two hubs can stay independent.
 export type MusicSync = {
   register: (el: HTMLAudioElement) => void;
   unregister: (el: HTMLAudioElement) => void;
@@ -50,6 +53,16 @@ export type MusicProps = {
   onScrubTimeChange?: (next: number | null) => void;
 };
 
+const FALLBACK_TRACKS: PlaylistTrack[] = [
+  {
+    title: "A Cruel Angel's Thesis",
+    artist: "Yoko Takahashi",
+    album: "Neon Genesis Evangelion · Opening Theme",
+    src: "/music/locomotion-soundtrack_cruel-angel-s-thesis-neon-genesis-evangelion-op.mp3",
+    cover: "/music_image/cover.jpg",
+  },
+];
+
 export default function Music({
   musicSync,
   scrubTime = null,
@@ -60,40 +73,145 @@ export default function Music({
   } = useTheme();
 
   const audioRef = useRef<HTMLAudioElement>(null);
+  const pendingAutoPlayRef = useRef(false);
 
-  // Local UI state mirrors the audio element's properties so the controls
-  // can render reactively. The audio element itself is the source of truth;
-  // these values are pushed in via media events.
+  const [tracks, setTracks] = useState<PlaylistTrack[]>(FALLBACK_TRACKS);
+  const [trackIndex, setTrackIndex] = useState(0);
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.8);
   const [muted, setMuted] = useState(false);
 
+  const currentTrack = tracks[trackIndex] ?? tracks[0];
+  const hasMultipleTracks = tracks.length > 1;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPlaylist = async () => {
+      try {
+        const response = await fetch(PLAYLIST_SRC, {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to load playlist");
+        }
+
+        const data = (await response.json()) as PlaylistTrack[];
+
+        const validTracks = data.filter(
+          (track) => track.src && track.title && track.cover,
+        );
+
+        if (!cancelled && validTracks.length > 0) {
+          setTracks(validTracks);
+          setTrackIndex((index) => clamp(index, 0, validTracks.length - 1));
+        }
+      } catch (error) {
+        console.error("Could not load playlist", error);
+      }
+    };
+
+    loadPlaylist();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Track changes should mirror across the two rendered screens.
+  useEffect(() => {
+    const onTrackChange = (event: Event) => {
+      const customEvent = event as CustomEvent<TrackChangeEventDetail>;
+      const nextIndex = customEvent.detail?.index;
+
+      if (typeof nextIndex !== "number") return;
+
+      setTrackIndex((current) => {
+        const clamped = clamp(nextIndex, 0, tracks.length - 1);
+        return current === clamped ? current : clamped;
+      });
+    };
+
+    window.addEventListener(MUSIC_TRACK_CHANGE_EVENT, onTrackChange);
+
+    return () =>
+      window.removeEventListener(MUSIC_TRACK_CHANGE_EVENT, onTrackChange);
+  }, [tracks.length]);
+
   // Register with the cross-screen sync hub so the other screen's audio
   // element follows our seeks/play/pause/volume changes.
   useEffect(() => {
     const el = audioRef.current;
     if (!el || !musicSync) return;
+
     musicSync.register(el);
+
     return () => musicSync.unregister(el);
   }, [musicSync]);
 
-  // Apply the initial volume to the audio element on mount so the first
-  // playback respects our default level.
+  // Apply the initial volume to the audio element on mount.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
+
     el.volume = volume;
     el.muted = muted;
-    // We deliberately only run this on mount; subsequent volume changes go
-    // through the slider's onChange handler which already updates the el.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When the track changes, reset the displayed time and optionally keep playing.
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+
+    setCurrentTime(0);
+    setDuration(0);
+    onScrubTimeChange?.(null);
+
+    el.currentTime = 0;
+
+    if (pendingAutoPlayRef.current) {
+      el.play().catch(() => {
+        /* ignore autoplay restrictions */
+      });
+    }
+  }, [trackIndex, onScrubTimeChange]);
+
+  const broadcastTrackIndex = (nextIndex: number) => {
+    const clamped = wrapIndex(nextIndex, tracks.length);
+
+    window.dispatchEvent(
+      new CustomEvent<TrackChangeEventDetail>(MUSIC_TRACK_CHANGE_EVENT, {
+        detail: { index: clamped },
+      }),
+    );
+  };
+
+  const goToTrack = (nextIndex: number) => {
+    if (tracks.length === 0) return;
+
+    const el = audioRef.current;
+    pendingAutoPlayRef.current = Boolean(el && !el.paused);
+
+    broadcastTrackIndex(nextIndex);
+  };
+
+  const goToPrevTrack = () => {
+    goToTrack(trackIndex - 1);
+  };
+
+  const goToNextTrack = () => {
+    goToTrack(trackIndex + 1);
+  };
 
   const togglePlay = () => {
     const el = audioRef.current;
     if (!el) return;
+
     if (el.paused) {
       el.play().catch(() => {
         /* ignore autoplay restrictions; user can retry */
@@ -106,6 +224,7 @@ export default function Music({
   const seekBy = (deltaSeconds: number) => {
     const el = audioRef.current;
     if (!el) return;
+
     const next = clamp(el.currentTime + deltaSeconds, 0, el.duration || 0);
     el.currentTime = next;
     musicSync?.broadcastTime(el, next);
@@ -114,17 +233,21 @@ export default function Music({
   const seekTo = (seconds: number) => {
     const el = audioRef.current;
     if (!el) return;
+
     el.currentTime = seconds;
     musicSync?.broadcastTime(el, seconds);
   };
 
   const setVolumeAndPush = (next: number) => {
     const el = audioRef.current;
+
     setVolume(next);
+
     if (next > 0 && muted) {
       setMuted(false);
       if (el) el.muted = false;
     }
+
     if (el) {
       el.volume = next;
       musicSync?.broadcastVolume(el, next, el.muted);
@@ -134,7 +257,9 @@ export default function Music({
   const toggleMuted = () => {
     const el = audioRef.current;
     const next = !muted;
+
     setMuted(next);
+
     if (el) {
       el.muted = next;
       musicSync?.broadcastVolume(el, el.volume, next);
@@ -156,14 +281,17 @@ export default function Music({
       }}
     >
       <audio
+        key={currentTrack.src}
         ref={audioRef}
-        src={TRACK_SRC}
+        src={currentTrack.src}
         preload="metadata"
         onPlay={(e) => {
+          pendingAutoPlayRef.current = true;
           setIsPlaying(true);
           musicSync?.broadcastPlayback(e.currentTarget, false);
         }}
         onPause={(e) => {
+          pendingAutoPlayRef.current = false;
           setIsPlaying(false);
           musicSync?.broadcastPlayback(e.currentTarget, true);
         }}
@@ -186,7 +314,14 @@ export default function Music({
           setMuted(el.muted);
           musicSync?.broadcastVolume(el, el.volume, el.muted);
         }}
-        onEnded={() => setIsPlaying(false)}
+        onEnded={() => {
+          setIsPlaying(false);
+          pendingAutoPlayRef.current = true;
+
+          if (hasMultipleTracks) {
+            broadcastTrackIndex(trackIndex + 1);
+          }
+        }}
       />
 
       <div
@@ -194,7 +329,10 @@ export default function Music({
           width: `${APP_WIDTH}px`,
           background: c("black"),
           border: `1px solid ${c("white", 0.1)}`,
-          boxShadow: `inset 0 0 0 1px ${c("white", 0.04)}, 0 18px 48px ${c("black", 0.55)}`,
+          boxShadow: `inset 0 0 0 1px ${c(
+            "white",
+            0.04,
+          )}, 0 18px 48px ${c("black", 0.55)}`,
           borderRadius: "20px",
           padding: "20px",
           boxSizing: "border-box",
@@ -203,8 +341,6 @@ export default function Music({
           gap: "16px",
         }}
       >
-        {/* Top row: square cover on the left, track metadata on the right.
-            Keeps the player short enough to fit above the dock. */}
         <div
           style={{
             display: "flex",
@@ -212,7 +348,8 @@ export default function Music({
             alignItems: "stretch",
           }}
         >
-          <Cover />
+          <Cover src={currentTrack.cover} title={currentTrack.title} />
+
           <div
             style={{
               flex: 1,
@@ -220,9 +357,20 @@ export default function Music({
               display: "flex",
               flexDirection: "column",
               justifyContent: "center",
+              gap: "14px",
             }}
           >
-            <TrackInfo />
+            <TrackInfo
+              track={currentTrack}
+              index={trackIndex}
+              total={tracks.length}
+            />
+
+            <TrackNav
+              disabled={!hasMultipleTracks}
+              onPrev={goToPrevTrack}
+              onNext={goToNextTrack}
+            />
           </div>
         </div>
 
@@ -233,10 +381,6 @@ export default function Music({
           onScrubStart={(t) => onScrubTimeChange?.(t)}
           onScrubMove={(t) => onScrubTimeChange?.(t)}
           onScrubEnd={(t) => {
-            // Seek both audios first so they're parked on the new position,
-            // then clear the shared scrubTime so both screens fall back to
-            // displaying currentTime — avoids a flash where one screen
-            // briefly shows the pre-seek time.
             seekTo(t);
             onScrubTimeChange?.(null);
           }}
@@ -260,10 +404,11 @@ export default function Music({
   );
 }
 
-function Cover() {
+function Cover({ src, title }: { src: string; title: string }) {
   const {
     palette: { c },
   } = useTheme();
+
   return (
     <div
       style={{
@@ -278,14 +423,14 @@ function Cover() {
       }}
     >
       <Image
-        src={COVER_SRC}
-        alt={`${TRACK_TITLE} cover`}
+        src={src}
+        alt={`${title} cover`}
         fill
         sizes={`${COVER_SIZE}px`}
         priority
         style={{ objectFit: "cover" }}
       />
-      {/* Subtle highlight ring to lift the cover off the dark card. */}
+
       <div
         aria-hidden
         style={{
@@ -300,10 +445,19 @@ function Cover() {
   );
 }
 
-function TrackInfo() {
+function TrackInfo({
+  track,
+  index,
+  total,
+}: {
+  track: PlaylistTrack;
+  index: number;
+  total: number;
+}) {
   const {
     palette: { c },
   } = useTheme();
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
       <div
@@ -315,8 +469,9 @@ function TrackInfo() {
           lineHeight: 1.2,
         }}
       >
-        {TRACK_TITLE}
+        {track.title}
       </div>
+
       <div
         style={{
           fontSize: "13px",
@@ -324,8 +479,9 @@ function TrackInfo() {
           letterSpacing: "0.02em",
         }}
       >
-        {TRACK_ARTIST}
+        {track.artist}
       </div>
+
       <div
         style={{
           fontSize: "11px",
@@ -334,9 +490,80 @@ function TrackInfo() {
           textTransform: "uppercase",
         }}
       >
-        {TRACK_ALBUM}
+        {track.album}
+      </div>
+
+      <div
+        style={{
+          marginTop: "4px",
+          fontSize: "11px",
+          color: c("white", 0.38),
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {index + 1} / {total}
       </div>
     </div>
+  );
+}
+
+function TrackNav({
+  disabled,
+  onPrev,
+  onNext,
+}: {
+  disabled: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: "8px" }}>
+      <SmallButton disabled={disabled} onClick={onPrev} label="Previous track">
+        Previous
+      </SmallButton>
+
+      <SmallButton disabled={disabled} onClick={onNext} label="Next track">
+        Next
+      </SmallButton>
+    </div>
+  );
+}
+
+function SmallButton({
+  disabled,
+  onClick,
+  label,
+  children,
+}: {
+  disabled: boolean;
+  onClick: () => void;
+  label: string;
+  children: React.ReactNode;
+}) {
+  const {
+    palette: { c },
+  } = useTheme();
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        flex: 1,
+        height: "32px",
+        borderRadius: "999px",
+        border: `1px solid ${c("white", disabled ? 0.08 : 0.16)}`,
+        background: c("white", disabled ? 0.025 : 0.06),
+        color: c("white", disabled ? 0.28 : 0.8),
+        fontFamily: "inherit",
+        fontSize: "12px",
+        cursor: disabled ? "default" : "pointer",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -358,12 +585,14 @@ function Scrubber({
   const {
     palette: { c },
   } = useTheme();
+
   const trackRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number } | null>(null);
 
   const seekFromEvent = (clientX: number): number => {
     const el = trackRef.current;
     if (!el || duration <= 0) return 0;
+
     const rect = el.getBoundingClientRect();
     const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
     return ratio * duration;
@@ -371,9 +600,11 @@ function Scrubber({
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (duration <= 0) return;
+
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = { pointerId: e.pointerId };
+
     const t = seekFromEvent(e.clientX);
     onScrubStart(t);
   };
@@ -385,7 +616,9 @@ function Scrubber({
 
   const finishScrub = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!dragRef.current || dragRef.current.pointerId !== e.pointerId) return;
+
     e.currentTarget.releasePointerCapture(e.pointerId);
+
     const t = seekFromEvent(e.clientX);
     dragRef.current = null;
     onScrubEnd(t);
@@ -415,7 +648,6 @@ function Scrubber({
           touchAction: "none",
         }}
       >
-        {/* Track background */}
         <div
           style={{
             position: "absolute",
@@ -426,7 +658,7 @@ function Scrubber({
             background: c("white", 0.12),
           }}
         />
-        {/* Filled portion */}
+
         <div
           style={{
             position: "absolute",
@@ -437,7 +669,7 @@ function Scrubber({
             background: c("white", 0.85),
           }}
         />
-        {/* Thumb */}
+
         <div
           aria-hidden
           style={{
@@ -452,6 +684,7 @@ function Scrubber({
           }}
         />
       </div>
+
       <div
         style={{
           display: "flex",
@@ -489,7 +722,9 @@ function Controls({
       }}
     >
       <SkipButton direction="back" onClick={onSeekBack} />
+
       <PlayPauseButton playing={isPlaying} onClick={onPlayPause} />
+
       <SkipButton direction="forward" onClick={onSeekForward} />
     </div>
   );
@@ -505,6 +740,7 @@ function PlayPauseButton({
   const {
     palette: { c },
   } = useTheme();
+
   return (
     <button
       type="button"
@@ -549,6 +785,7 @@ function SkipButton({
   const {
     palette: { c },
   } = useTheme();
+
   const icon =
     direction === "back" ? (
       <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
@@ -559,7 +796,9 @@ function SkipButton({
         <path d="M13 12 3 6.4v11.2L13 12Zm9 0L12 6.4v11.2L22 12Z" />
       </svg>
     );
+
   const label = direction === "back" ? "Back 10 seconds" : "Forward 10 seconds";
+
   return (
     <button
       type="button"
@@ -599,8 +838,10 @@ function VolumeRow({
   const {
     palette: { c },
   } = useTheme();
+
   const effective = muted ? 0 : volume;
   const icon = muted || volume === 0 ? "🔇" : volume < 0.5 ? "🔈" : "🔊";
+
   return (
     <div
       style={{
@@ -631,6 +872,7 @@ function VolumeRow({
       >
         <span aria-hidden>{icon}</span>
       </button>
+
       <input
         type="range"
         min={0}
@@ -647,6 +889,7 @@ function VolumeRow({
           } satisfies CSSProperties
         }
       />
+
       <span
         style={{
           fontSize: "11px",
@@ -660,6 +903,11 @@ function VolumeRow({
       </span>
     </div>
   );
+}
+
+function wrapIndex(index: number, length: number): number {
+  if (length <= 0) return 0;
+  return ((index % length) + length) % length;
 }
 
 function clamp(n: number, min: number, max: number): number {
