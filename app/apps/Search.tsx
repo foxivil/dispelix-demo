@@ -16,14 +16,9 @@ type SearchResult = {
   title: string;
   url: string;
   snippet: string;
-  // Free-form tags so a search like "music" or "linux" can match results
-  // that don't literally contain the word in title/snippet.
   tags: string[];
 };
 
-// Tiny in-memory "index" so the demo search engine has something to chew on.
-// Curated to feel realistic rather than be exhaustive — about ~20 entries
-// across a few familiar categories.
 const DOCUMENTS: ReadonlyArray<SearchResult> = [
   {
     id: "wiki",
@@ -187,23 +182,26 @@ const DOCUMENTS: ReadonlyArray<SearchResult> = [
   },
 ];
 
-// Lightweight scoring: token-based substring match across title/url/snippet/tags.
-// Title hits are weighted highest; tag hits next; the rest contribute small
-// amounts so partial matches still surface.
+const SUGGESTIONS = ["music", "react", "linux", "space"];
+
 function scoreResult(query: string, doc: SearchResult): number {
   const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return 0;
+
   const title = doc.title.toLowerCase();
   const url = doc.url.toLowerCase();
   const snippet = doc.snippet.toLowerCase();
   const tagText = doc.tags.join(" ").toLowerCase();
+
   let score = 0;
+
   for (const t of tokens) {
     if (title.includes(t)) score += 6;
     if (tagText.includes(t)) score += 4;
     if (snippet.includes(t)) score += 2;
     if (url.includes(t)) score += 1;
   }
+
   return score;
 }
 
@@ -213,8 +211,10 @@ export default function Search({ query, onQueryChange }: SearchProps) {
   } = useTheme();
 
   const trimmed = query.trim();
+
   const results = useMemo(() => {
     if (!trimmed) return [];
+
     return DOCUMENTS.map((doc) => ({ doc, score: scoreResult(trimmed, doc) }))
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score)
@@ -240,15 +240,18 @@ export default function Search({ query, onQueryChange }: SearchProps) {
           overflow: "hidden",
           background: c("black"),
           border: `1px solid ${c("white", 0.1)}`,
-          boxShadow: `inset 0 0 0 1px ${c("white", 0.04)}, 0 18px 48px ${c("black", 0.55)}`,
-          padding: "28px 32px",
+          boxShadow: `inset 0 0 0 1px ${c(
+            "white",
+            0.04,
+          )}, 0 18px 48px ${c("black", 0.55)}`,
+          padding: "24px 28px",
           boxSizing: "border-box",
           display: "flex",
           flexDirection: "column",
-          gap: "20px",
+          gap: "16px",
         }}
       >
-        <Brand />
+        <Header query={trimmed} resultCount={results.length} />
 
         <SearchField
           query={query}
@@ -256,52 +259,51 @@ export default function Search({ query, onQueryChange }: SearchProps) {
           onClear={() => onQueryChange("")}
         />
 
+        {!trimmed && <SuggestionRow onPick={onQueryChange} />}
+
         <ResultsList query={trimmed} results={results.map((r) => r.doc)} />
       </div>
     </div>
   );
 }
 
-function Brand() {
+function Header({
+  query,
+  resultCount,
+}: {
+  query: string;
+  resultCount: number;
+}) {
   const {
     palette: { c },
   } = useTheme();
+
   return (
     <div
       style={{
         display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: "4px",
+        alignItems: "baseline",
+        justifyContent: "space-between",
+        flexShrink: 0,
+        fontSize: "13px",
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        color: c("white", 0.7),
       }}
     >
-      <div
+      <span>Search</span>
+
+      <span
         style={{
-          fontSize: "44px",
-          fontWeight: 700,
-          letterSpacing: "-0.02em",
-          lineHeight: 1,
-          // Layered gradient evokes the "AR" branding without leaning on
-          // emoji/icons. Each chunk reads from a palette token so it follows
-          // the colour settings.
-          background: `linear-gradient(120deg, ${c("blue")} 0%, ${c("redHot")} 100%)`,
-          WebkitBackgroundClip: "text",
-          backgroundClip: "text",
-          color: "transparent",
-        }}
-      >
-        ARsearcher
-      </div>
-      <div
-        style={{
-          fontSize: "11px",
-          letterSpacing: "0.18em",
-          textTransform: "uppercase",
           color: c("white", 0.45),
+          fontSize: "11px",
+          fontVariantNumeric: "tabular-nums",
         }}
       >
-        Augmented Reality Search
-      </div>
+        {query
+          ? `${resultCount} ${resultCount === 1 ? "result" : "results"}`
+          : `${DOCUMENTS.length} indexed`}
+      </span>
     </div>
   );
 }
@@ -318,6 +320,7 @@ function SearchField({
   const {
     palette: { c },
   } = useTheme();
+
   return (
     <form
       onSubmit={(e) => e.preventDefault()}
@@ -325,41 +328,43 @@ function SearchField({
         position: "relative",
         display: "flex",
         alignItems: "center",
+        flexShrink: 0,
       }}
     >
       <span
         aria-hidden
         style={{
           position: "absolute",
-          left: "18px",
-          color: c("white", 0.55),
-          fontSize: "18px",
+          left: "16px",
+          color: c("white", 0.5),
+          fontSize: "16px",
           pointerEvents: "none",
         }}
       >
         🔍
       </span>
+
       <input
         type="text"
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}
-        placeholder="Search the web…"
+        placeholder="Search indexed pages…"
         autoComplete="off"
         spellCheck={false}
         style={{
-          flex: 1,
-          height: "52px",
-          padding: "0 56px 0 48px",
-          fontSize: "16px",
+          width: "100%",
+          height: "48px",
+          padding: "0 48px 0 44px",
+          fontSize: "15px",
           color: c("white"),
           background: c("white", 0.06),
-          border: `1px solid ${c("white", 0.18)}`,
-          borderRadius: "999px",
+          border: `1px solid ${c("white", 0.16)}`,
+          borderRadius: "12px",
           outline: "none",
           fontFamily: "inherit",
-          letterSpacing: "0.01em",
         }}
       />
+
       {query.length > 0 && (
         <button
           type="button"
@@ -367,19 +372,19 @@ function SearchField({
           aria-label="Clear search"
           style={{
             position: "absolute",
-            right: "12px",
+            right: "10px",
             width: "28px",
             height: "28px",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
             borderRadius: "999px",
-            border: "none",
-            background: c("white", 0.08),
-            color: c("white", 0.85),
+            border: `1px solid ${c("white", 0.1)}`,
+            background: c("white", 0.06),
+            color: c("white", 0.75),
             cursor: "pointer",
             fontFamily: "inherit",
-            fontSize: "13px",
+            fontSize: "12px",
             lineHeight: 1,
           }}
         >
@@ -387,6 +392,55 @@ function SearchField({
         </button>
       )}
     </form>
+  );
+}
+
+function SuggestionRow({ onPick }: { onPick: (query: string) => void }) {
+  const {
+    palette: { c },
+  } = useTheme();
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+        flexShrink: 0,
+      }}
+    >
+      <span
+        style={{
+          fontSize: "11px",
+          color: c("white", 0.42),
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+        }}
+      >
+        Try
+      </span>
+
+      {SUGGESTIONS.map((item) => (
+        <button
+          key={item}
+          type="button"
+          onClick={() => onPick(item)}
+          style={{
+            height: "28px",
+            padding: "0 11px",
+            borderRadius: "999px",
+            border: `1px solid ${c("white", 0.12)}`,
+            background: c("white", 0.04),
+            color: c("white", 0.65),
+            fontFamily: "inherit",
+            fontSize: "12px",
+            cursor: "pointer",
+          }}
+        >
+          {item}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -411,16 +465,14 @@ function ResultsList({
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          gap: "6px",
+          gap: "8px",
           color: c("white", 0.5),
           textAlign: "center",
         }}
       >
-        <div style={{ fontSize: "14px" }}>
-          Type to search across {DOCUMENTS.length} indexed pages.
-        </div>
-        <div style={{ fontSize: "12px", color: c("white", 0.35) }}>
-          Try “music”, “react”, “linux”, or “space”.
+        <div style={{ fontSize: "20px", fontWeight: 600 }}>Ready to search</div>
+        <div style={{ fontSize: "14px", color: c("white", 0.42) }}>
+          Type a query to search across {DOCUMENTS.length} indexed pages.
         </div>
       </div>
     );
@@ -436,16 +488,14 @@ function ResultsList({
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          gap: "6px",
+          gap: "8px",
           color: c("white", 0.55),
           textAlign: "center",
         }}
       >
-        <div style={{ fontSize: "14px" }}>
-          No results for <em>“{query}”</em>.
-        </div>
-        <div style={{ fontSize: "12px", color: c("white", 0.4) }}>
-          Try different or broader keywords.
+        <div style={{ fontSize: "20px", fontWeight: 600 }}>No results</div>
+        <div style={{ fontSize: "14px", color: c("white", 0.42) }}>
+          No matches for <em>“{query}”</em>.
         </div>
       </div>
     );
@@ -459,22 +509,12 @@ function ResultsList({
         overflowY: "auto",
         display: "flex",
         flexDirection: "column",
-        gap: "14px",
+        gap: "10px",
         paddingRight: "4px",
       }}
     >
-      <div
-        style={{
-          fontSize: "11px",
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          color: c("white", 0.4),
-        }}
-      >
-        About {results.length} result{results.length === 1 ? "" : "s"}
-      </div>
-      {results.map((r) => (
-        <ResultRow key={r.id} result={r} query={query} />
+      {results.map((result) => (
+        <ResultRow key={result.id} result={result} query={query} />
       ))}
     </div>
   );
@@ -490,16 +530,19 @@ function ResultRow({
   const {
     palette: { c },
   } = useTheme();
+
+  const domain = result.url
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0];
+
   return (
     <div
       style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "4px",
-        padding: "8px 12px",
-        borderRadius: "10px",
-        background: c("white", 0.03),
-        border: `1px solid ${c("white", 0.06)}`,
+        padding: "13px 15px",
+        borderRadius: "14px",
+        background: c("white", 0.04),
+        border: `1px solid ${c("white", 0.08)}`,
       }}
     >
       <div
@@ -510,54 +553,85 @@ function ResultRow({
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
+          marginBottom: "4px",
         }}
         title={result.url}
       >
-        {result.url}
+        {domain}
       </div>
+
       <div
         style={{
           fontSize: "16px",
-          color: c("blue"),
-          fontWeight: 500,
-          lineHeight: 1.2,
+          color: c("white"),
+          fontWeight: 600,
+          lineHeight: 1.25,
         }}
       >
         <Highlight text={result.title} query={query} />
       </div>
+
       <div
         style={{
+          marginTop: "6px",
           fontSize: "13px",
-          color: c("white", 0.7),
+          color: c("white", 0.62),
           lineHeight: 1.4,
         }}
       >
         <Highlight text={result.snippet} query={query} />
       </div>
+
+      <div
+        style={{
+          display: "flex",
+          gap: "6px",
+          flexWrap: "wrap",
+          marginTop: "9px",
+        }}
+      >
+        {result.tags.slice(0, 3).map((tag) => (
+          <span
+            key={tag}
+            style={{
+              padding: "3px 7px",
+              borderRadius: "999px",
+              background: c("white", 0.05),
+              color: c("white", 0.45),
+              fontSize: "10px",
+            }}
+          >
+            {tag}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
 
-// Splits `text` on each query token (case-insensitive) and bolds matched
-// segments so the user can see which words triggered the result.
 function Highlight({ text, query }: { text: string; query: string }) {
+  const {
+    palette: { c },
+  } = useTheme();
+
   const tokens = query
     .trim()
     .split(/\s+/)
     .filter(Boolean)
     .map((t) => t.toLowerCase());
+
   if (tokens.length === 0) return <>{text}</>;
-  // Build a single regex that matches any of the tokens. Escape any regex
-  // metacharacters in the user's query so it can't blow up the match.
+
   const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const splitter = new RegExp(`(${escaped.join("|")})`, "ig");
   const tokenSet = new Set(tokens);
   const parts = text.split(splitter);
+
   return (
     <>
       {parts.map((part, i) =>
         tokenSet.has(part.toLowerCase()) ? (
-          <strong key={i} style={{ fontWeight: 700 }}>
+          <strong key={i} style={{ color: c("blue"), fontWeight: 700 }}>
             {part}
           </strong>
         ) : (
