@@ -2,7 +2,6 @@
 
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -163,22 +162,20 @@ export default function Music({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // When the track changes, reset the displayed time and optionally keep playing.
+  // When the track changes, stop playback and reset the newly opened song.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
 
+    pendingAutoPlayRef.current = false;
+
+    setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
     onScrubTimeChange?.(null);
 
+    el.pause();
     el.currentTime = 0;
-
-    if (pendingAutoPlayRef.current) {
-      el.play().catch(() => {
-        /* ignore autoplay restrictions */
-      });
-    }
   }, [trackIndex, onScrubTimeChange]);
 
   const broadcastTrackIndex = (nextIndex: number) => {
@@ -195,7 +192,18 @@ export default function Music({
     if (tracks.length === 0) return;
 
     const el = audioRef.current;
-    pendingAutoPlayRef.current = Boolean(el && !el.paused);
+
+    if (el) {
+      el.pause();
+      el.currentTime = 0;
+      musicSync?.broadcastPlayback(el, true);
+      musicSync?.broadcastTime(el, 0);
+    }
+
+    pendingAutoPlayRef.current = false;
+    setIsPlaying(false);
+    setCurrentTime(0);
+    onScrubTimeChange?.(null);
 
     broadcastTrackIndex(nextIndex);
   };
@@ -316,7 +324,7 @@ export default function Music({
         }}
         onEnded={() => {
           setIsPlaying(false);
-          pendingAutoPlayRef.current = true;
+          pendingAutoPlayRef.current = false;
 
           if (hasMultipleTracks) {
             broadcastTrackIndex(trackIndex + 1);
