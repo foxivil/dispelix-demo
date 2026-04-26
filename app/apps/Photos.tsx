@@ -11,12 +11,21 @@ export type PhotosToast = {
   text: string;
 };
 
+export type CameraOption = {
+  deviceId: string;
+  label: string;
+};
+
 export type PhotosProps = {
   recording: boolean;
   recordingMs: number;
   toast: PhotosToast | null;
   toastDurationMs?: number;
   onClick: () => void;
+
+  cameras?: CameraOption[];
+  selectedCameraId?: string | null;
+  onCameraChange?: (deviceId: string) => void;
 };
 
 export const formatDuration = (totalMs: number): string => {
@@ -87,6 +96,9 @@ export default function Photos({
   toast,
   toastDurationMs = 2000,
   onClick,
+  cameras = [],
+  selectedCameraId = null,
+  onCameraChange,
 }: PhotosProps) {
   const {
     palette: { c },
@@ -136,7 +148,7 @@ export default function Photos({
             letterSpacing: "0.08em",
             textTransform: "uppercase",
             color: c("white", 0.78),
-            pointerEvents: "none",
+            pointerEvents: "auto",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -152,7 +164,43 @@ export default function Photos({
                   : "none",
               }}
             />
-            {recording ? "REC" : "Photo"}
+
+            <span>{recording ? "REC" : "Photo"}</span>
+
+            {cameras.length > 0 && (
+              <select
+                value={selectedCameraId ?? ""}
+                disabled={recording}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  onCameraChange?.(e.target.value);
+                }}
+                style={{
+                  maxWidth: "280px",
+                  height: "30px",
+                  marginLeft: "10px",
+                  padding: "0 10px",
+                  borderRadius: "999px",
+                  border: `1px solid ${c("white", 0.18)}`,
+                  background: c("black", 0.55),
+                  color: c("white", recording ? 0.35 : 0.78),
+                  fontFamily: "inherit",
+                  fontSize: "12px",
+                  letterSpacing: "0.02em",
+                  outline: "none",
+                  cursor: recording ? "default" : "pointer",
+                  pointerEvents: "auto",
+                  textTransform: "none",
+                }}
+              >
+                {cameras.map((camera, index) => (
+                  <option key={camera.deviceId} value={camera.deviceId}>
+                    {camera.label || `Camera ${index + 1}`}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div
@@ -161,6 +209,7 @@ export default function Photos({
               letterSpacing: "0.04em",
               minWidth: "70px",
               textAlign: "right",
+              pointerEvents: "none",
             }}
           >
             {recording ? formatDuration(recordingMs) : "Ready"}

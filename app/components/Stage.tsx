@@ -142,6 +142,7 @@ export default function Stage() {
   const cameraRecordingStartedAtRef = useRef<number | null>(null);
 
   const [cameraReady, setCameraReady] = useState(false);
+  const [cameraDevices, setCameraDevices] = useState<CameraDevice[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     return window.localStorage.getItem(CAMERA_STORAGE_KEY);
@@ -153,7 +154,6 @@ export default function Stage() {
 
   const [files, setFiles] = useState<MediaFile[]>([]);
   const [openedFile, setOpenedFile] = useState<MediaFile | null>(null);
-  const fileIdRef = useRef(0);
 
   const sortedFiles = useMemo(
     () => [...files].sort((a, b) => b.createdAt - a.createdAt),
@@ -597,6 +597,8 @@ export default function Stage() {
           label: device.label || `Camera ${index + 1}`,
         }));
 
+      setCameraDevices(videoInputs);
+
       if (videoInputs.length === 0) {
         setCameraReady(false);
         photosShowToast("No camera found");
@@ -632,6 +634,21 @@ export default function Stage() {
       setCameraReady(false);
       photosShowToast("Camera discovery failed");
     }
+  };
+
+  const handleCameraChange = async (deviceId: string) => {
+    if (!deviceId || deviceId === selectedCameraId) return;
+
+    setSelectedCameraId(deviceId);
+    window.localStorage.setItem(CAMERA_STORAGE_KEY, deviceId);
+
+    const selected = cameraDevices.find(
+      (camera) => camera.deviceId === deviceId,
+    );
+
+    photosShowToast(selected ? `Camera: ${selected.label}` : "Camera changed");
+
+    await openSelectedCamera(deviceId);
   };
 
   useEffect(() => {
@@ -1017,6 +1034,9 @@ export default function Stage() {
     toast: photosToast,
     toastDurationMs: PHOTOS_TOAST_MS,
     onClick: handlePhotoClick,
+    cameras: cameraDevices,
+    selectedCameraId,
+    onCameraChange: handleCameraChange,
   };
 
   const filesProps: FilesProps = {
