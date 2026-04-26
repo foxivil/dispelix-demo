@@ -29,9 +29,8 @@ type TrackChangeEventDetail = {
 };
 
 const MUSIC_TRACK_CHANGE_EVENT = "ar-music-track-change";
+const MUSIC_STOP_EVENT = "ar-music-stop";
 
-// Sync hub interface — both mirrored <audio> elements register here so that
-// play/pause/seek/volume on one screen mirrors to the other in near real-time.
 export type MusicSync = {
   register: (el: HTMLAudioElement) => void;
   unregister: (el: HTMLAudioElement) => void;
@@ -46,8 +45,6 @@ export type MusicSync = {
 
 export type MusicProps = {
   musicSync?: MusicSync;
-  // Lifted to Stage so an in-progress drag on one screen reflects on the
-  // other in real time. `null` means nobody is currently scrubbing.
   scrubTime?: number | null;
   onScrubTimeChange?: (next: number | null) => void;
 };
@@ -121,7 +118,6 @@ export default function Music({
     };
   }, []);
 
-  // Track changes should mirror across the two rendered screens.
   useEffect(() => {
     const onTrackChange = (event: Event) => {
       const customEvent = event as CustomEvent<TrackChangeEventDetail>;
@@ -141,8 +137,6 @@ export default function Music({
       window.removeEventListener(MUSIC_TRACK_CHANGE_EVENT, onTrackChange);
   }, [tracks.length]);
 
-  // Register with the cross-screen sync hub so the other screen's audio
-  // element follows our seeks/play/pause/volume changes.
   useEffect(() => {
     const el = audioRef.current;
     if (!el || !musicSync) return;
@@ -152,7 +146,6 @@ export default function Music({
     return () => musicSync.unregister(el);
   }, [musicSync]);
 
-  // Apply the initial volume to the audio element on mount.
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -162,20 +155,43 @@ export default function Music({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // When the track changes, stop playback and reset the newly opened song.
+  useEffect(() => {
+    const stopMusic = () => {
+      const el = audioRef.current;
+      if (!el) return;
+
+      el.pause();
+      el.currentTime = 0;
+
+      pendingAutoPlayRef.current = false;
+
+      setIsPlaying(false);
+      setCurrentTime(0);
+      setDuration(0);
+      onScrubTimeChange?.(null);
+
+      musicSync?.broadcastTime(el, 0);
+    };
+
+    window.addEventListener(MUSIC_STOP_EVENT, stopMusic);
+
+    return () => window.removeEventListener(MUSIC_STOP_EVENT, stopMusic);
+  }, [musicSync, onScrubTimeChange]);
+
   useEffect(() => {
     const el = audioRef.current;
     if (!el) return;
 
     pendingAutoPlayRef.current = false;
 
+    el.pause();
+    el.currentTime = 0;
+    el.load();
+
     setIsPlaying(false);
     setCurrentTime(0);
     setDuration(0);
     onScrubTimeChange?.(null);
-
-    el.pause();
-    el.currentTime = 0;
   }, [trackIndex, onScrubTimeChange]);
 
   const broadcastTrackIndex = (nextIndex: number) => {
@@ -196,13 +212,13 @@ export default function Music({
     if (el) {
       el.pause();
       el.currentTime = 0;
-      musicSync?.broadcastPlayback(el, true);
-      musicSync?.broadcastTime(el, 0);
     }
 
     pendingAutoPlayRef.current = false;
+
     setIsPlaying(false);
     setCurrentTime(0);
+    setDuration(0);
     onScrubTimeChange?.(null);
 
     broadcastTrackIndex(nextIndex);
@@ -289,19 +305,16 @@ export default function Music({
       }}
     >
       <audio
-        key={currentTrack.src}
         ref={audioRef}
         src={currentTrack.src}
         preload="metadata"
-        onPlay={(e) => {
+        onPlay={() => {
           pendingAutoPlayRef.current = true;
           setIsPlaying(true);
-          musicSync?.broadcastPlayback(e.currentTarget, false);
         }}
-        onPause={(e) => {
+        onPause={() => {
           pendingAutoPlayRef.current = false;
           setIsPlaying(false);
-          musicSync?.broadcastPlayback(e.currentTarget, true);
         }}
         onTimeUpdate={(e) => {
           const el = e.currentTarget;
@@ -323,7 +336,15 @@ export default function Music({
           musicSync?.broadcastVolume(el, el.volume, el.muted);
         }}
         onEnded={() => {
+          const el = audioRef.current;
+
+          if (el) {
+            el.pause();
+            el.currentTime = 0;
+          }
+
           setIsPlaying(false);
+          setCurrentTime(0);
           pendingAutoPlayRef.current = false;
 
           if (hasMultipleTracks) {

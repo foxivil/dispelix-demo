@@ -29,6 +29,8 @@ const ICON_GAP = 8;
 const PAD_X = 16;
 const PAD_Y = 10;
 
+const MUSIC_STOP_EVENT = "ar-music-stop";
+
 const ICONS: Partial<Record<AppId, ComponentType<LucideProps>>> = {
   home: Home,
   messages: MessageCircle,
@@ -104,7 +106,13 @@ export default function Dock({
               aria-label={app.label}
               aria-pressed={isActive}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onOpen?.(app.id)}
+              onClick={() => {
+                if (app.id !== "music") {
+                  window.dispatchEvent(new CustomEvent(MUSIC_STOP_EVENT));
+                }
+
+                onOpen?.(app.id);
+              }}
               onMouseEnter={() => setHoveredId(app.id)}
               onMouseLeave={() =>
                 setHoveredId((curr) => (curr === app.id ? null : curr))
